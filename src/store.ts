@@ -18,6 +18,17 @@ export interface PendingInput {
   receivedAt: string;
 }
 
+/** Registro simple de la charla (lo que se mandó y cuándo), para medir dónde se cae la gente. */
+export interface Turno {
+  de: "lead" | "bot";
+  at: string;
+  texto: string;
+  /** Etapa del lead cuando el bot mandó este mensaje. */
+  etapa?: Etapa;
+  /** El bot escribió solo porque el lead no respondía. */
+  seguimiento?: boolean;
+}
+
 export interface Lead {
   subscriberId: string;
   firstName?: string;
@@ -33,6 +44,9 @@ export interface Lead {
   /** Historial completo con Claude (incluye tool_use / tool_result). Solo se agrega, nunca se edita. */
   history: Anthropic.Beta.BetaMessageParam[];
   pending: PendingInput[];
+  turnos: Turno[];
+  /** Cuándo llegó a cada etapa (para el embudo). */
+  hitos: { etapa: Etapa; at: string }[];
   booking?: { start?: string; uid?: string; link?: string; meetingUrl?: string };
   paused: boolean;
   lastUserAt?: string;
@@ -51,11 +65,23 @@ export function newLead(subscriberId: string): Lead {
     tags: [],
     history: [],
     pending: [],
+    turnos: [],
+    hitos: [],
     paused: false,
     followupsSent: 0,
     createdAt: now,
     updatedAt: now,
   };
+}
+
+/** Cambia la etapa y deja registrado cuándo pasó. Devuelve la etapa anterior. */
+export function registrarEtapa(lead: Lead, etapa: Etapa, at = new Date()): Etapa {
+  const prev = lead.etapa;
+  if (prev !== etapa) {
+    lead.etapa = etapa;
+    lead.hitos.push({ etapa, at: at.toISOString() });
+  }
+  return prev;
 }
 
 export interface LeadStore {

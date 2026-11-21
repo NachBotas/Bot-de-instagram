@@ -5,7 +5,7 @@ import type { InboundMessage } from "./inbound.js";
 import type { ManyChatClient } from "./integrations/manychat.js";
 import { asClaudeImageType, downloadMedia, looksLikeAttachmentUrl } from "./integrations/media.js";
 import type { Transcriber } from "./integrations/transcription.js";
-import type { Lead, LeadStore, PendingInput } from "./store.js";
+import { registrarEtapa, type Lead, type LeadStore, type PendingInput } from "./store.js";
 
 type Block = Anthropic.Beta.BetaContentBlockParam;
 
@@ -143,7 +143,8 @@ export class Engine {
     const batch = lead.pending;
     lead.pending = [];
     const blocks = await this.toBlocks(batch);
-    if (lead.etapa === "nuevo") lead.etapa = "conversando";
+    if (lead.etapa === "nuevo") registrarEtapa(lead, "conversando");
+    lead.turnos.push({ de: "lead", at: batch[batch.length - 1]!.receivedAt, texto: blocksToText(blocks) });
 
     let reply;
     try {
@@ -161,7 +162,7 @@ export class Engine {
     await this.send(lead, reply.text);
   }
 
-  private async send(lead: Lead, text: string): Promise<void> {
+  private async send(lead: Lead, text: string, opts: { seguimiento?: boolean } = {}): Promise<void> {
     const bubbles = toBubbles(text, this.o.maxBubbles);
     if (bubbles.length === 0) return;
     for (let i = 0; i < bubbles.length; i++) {
@@ -170,6 +171,13 @@ export class Engine {
     }
     const fresh = (await this.o.store.get(lead.subscriberId)) ?? lead;
     fresh.lastBotAt = new Date().toISOString();
+    fresh.turnos.push({
+      de: "bot",
+      at: fresh.lastBotAt,
+      texto: bubbles.join("\n\n"),
+      etapa: fresh.etapa,
+      ...(opts.seguimiento ? { seguimiento: true } : {}),
+    });
     await this.o.store.save(fresh);
   }
 
@@ -254,11 +262,19 @@ export class Engine {
         l.followupsSent += 1;
         await this.o.store.save(l);
         if (!reply.refused && reply.text) {
-          await this.send(l, reply.text);
+          await this.send(l, reply.text, { seguimiento: true });
           sent++;
         }
       });
     }
     return sent;
   }
+}
+
+/** Texto legible de lo que mandó el lead (para el registro de la charla). */
+function blocksToText(blocks: Block[]): string {
+  return blocks
+    .map((b) => (b.type === "text" ? b.text : b.type === "image" ? "[imagen]" : `[${b.type}]`))
+    .filter((t) => t !== "[El lead mandó la imagen de arriba]")
+    .join("\n");
 }

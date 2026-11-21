@@ -112,6 +112,12 @@ describe("Engine + Setter", () => {
     expect(lead.perfil.situacion).toBe("coach con 3 clientes");
     expect(lead.pending).toHaveLength(0);
     expect(lead.history).toHaveLength(4); // user, assistant(tool_use), user(tool_result), assistant(text)
+    // Registro para el análisis de cuellos de botella
+    expect(lead.turnos.map((t) => [t.de, t.texto])).toEqual([
+      ["lead", "hola\nsoy coach y tengo 3 clientes"],
+      ["bot", "Buenísimo Ana!\n\n¿Y a cuántos clientes te gustaría llegar?"],
+    ]);
+    expect(lead.hitos.map((h) => h.etapa)).toEqual(["conversando"]);
   });
 
   it("transcribe audios antes de mandarlos a Claude", async () => {
@@ -156,6 +162,8 @@ describe("Engine + Setter", () => {
     expect(JSON.stringify(calls[1]!.messages.at(-1))).toContain("EVENTO DEL SISTEMA");
     expect(sent.at(-1)).toContain("¿Pudiste pensarlo?");
     expect(await engine.runFollowups(new Date(later.getTime() + 7 * 60 * 60 * 1000))).toBe(0);
-    expect((await store.get("s5"))!.followupsSent).toBe(1);
+    const l5 = (await store.get("s5"))!;
+    expect(l5.followupsSent).toBe(1);
+    expect(l5.turnos.at(-1)).toMatchObject({ de: "bot", seguimiento: true });
   });
 });

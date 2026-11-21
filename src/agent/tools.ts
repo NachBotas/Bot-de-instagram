@@ -2,7 +2,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import type { BookingMode } from "../config.js";
 import { buildBookingLink, formatSlot, pickSpreadSlots, type CalComClient } from "../integrations/calendar.js";
 import type { ManyChatClient } from "../integrations/manychat.js";
-import type { Etapa, Lead } from "../store.js";
+import { registrarEtapa, type Etapa, type Lead } from "../store.js";
 import type { Automation } from "./automations.js";
 
 type Tool = Anthropic.Beta.BetaTool;
@@ -182,8 +182,7 @@ async function safe(deps: ToolDeps, label: string, fn: () => Promise<unknown>): 
 
 async function setEtapa(lead: Lead, etapa: Etapa, deps: ToolDeps): Promise<void> {
   if (lead.etapa === etapa) return;
-  const prev = lead.etapa;
-  lead.etapa = etapa;
+  const prev = registrarEtapa(lead, etapa);
   const id = lead.subscriberId;
   await safe(deps, "tag de etapa", async () => {
     if (prev !== "nuevo") await deps.manychat.removeTag(id, `setter_${prev}`);

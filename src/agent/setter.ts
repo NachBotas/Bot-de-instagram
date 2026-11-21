@@ -12,6 +12,13 @@ const MAX_ITERATIONS = 8;
 /** Modelos que aceptan `fallbacks: "default"` (reintento automático en otro modelo si el primero declina). */
 const FALLBACK_MODELS = new Set(["claude-opus-5-5", "claude-opus-5", "claude-fable-5-2", "claude-fable-5-1", "claude-sonnet-5-5"]);
 
+/** Parámetros para que, si el modelo declina, la API reintente sola con otro modelo. */
+export function fallbackParams(model: string) {
+  return FALLBACK_MODELS.has(model)
+    ? { betas: ["server-side-fallback-2026-07-01"] as Anthropic.Beta.AnthropicBeta[], fallbacks: "default" as const }
+    : {};
+}
+
 export interface SetterOptions {
   client: Anthropic;
   model: string;
@@ -106,11 +113,10 @@ export class Setter {
 
   private async call(messages: BetaMessageParam[]) {
     const { client, model, effort, systemPrompt, tools } = this.opts;
-    const useFallbacks = FALLBACK_MODELS.has(model);
     return client.beta.messages.create({
       model,
       max_tokens: 16000,
-      ...(useFallbacks ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {}),
+      ...fallbackParams(model),
       output_config: { effort },
       system: [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }],
       tools,

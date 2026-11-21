@@ -10,6 +10,7 @@ Un setter de ventas que atiende los DMs de Instagram por vos:
 - **Etiqueta y guarda datos** en ManyChat (tags por etapa + campos con el resumen del lead para el closer).
 - **Deriva a un humano** cuando hace falta y se pone en pausa.
 - **Escribe como persona**: junta los mensajes que el lead manda seguidos, responde en burbujas cortas y hace un seguimiento si deja de contestar.
+- **Detecta cuellos de botella**: te dice después de qué pregunta deja de responder la gente y te propone cómo reescribirla.
 
 ```
 Instagram DM ──► ManyChat (Default Reply → External Request) ──► este servidor
@@ -124,7 +125,40 @@ Con `ADMIN_TOKEN` definido (header `Authorization: Bearer <ADMIN_TOKEN>`):
 | POST | `/admin/leads/:id/resume` | lo reactiva |
 | DELETE | `/admin/leads/:id` | borra la conversación (empieza de cero) |
 
-## 8. Ajustes útiles
+## 8. Cuellos de botella: ¿dónde deja de responder la gente?
+
+El bot registra cada mensaje que manda y si el lead respondió (dentro de las 24 h) o no. El análisis:
+
+1. **Clasifica cada mensaje del bot** según lo que le pedía al lead (saludo, pregunta de objetivo, de presupuesto, propuesta de llamada, pedido de email, link de agenda…). Lo hace Claude y queda guardado, así no se vuelve a pagar por los mismos mensajes.
+2. **Calcula el % de abandono por tipo de mensaje**, el embudo (conversó → calificado → agendó) y en qué mensaje se quedó cada lead que dejó de responder.
+3. **Te da recomendaciones**: Claude lee ejemplos reales de los mensajes donde la gente se fue (y de los que sí funcionaron), te explica por qué cree que pasa y te propone versiones mejores del mensaje.
+
+```bash
+npm run analisis
+```
+
+```bash
+npm run analisis -- --dias 30
+```
+
+El informe se imprime y se guarda en `data/reportes/`. Ejemplo:
+
+```
+## Dónde se quedó la gente que dejó de responder
+- Pregunta presupuesto: 7 leads (70%)
+- Saludo inicial: 2 leads (20%)
+
+| Mensaje del bot      | Enviados | Respondieron | No respondieron | Abandono |
+|----------------------|----------|--------------|-----------------|----------|
+| Pregunta presupuesto | 12       | 5            | 7               | 58%      |
+| Propuesta de llamada | 5        | 4            | 1               | 20%      |
+```
+
+También está en el panel: `GET /admin/analisis?dias=30&formato=md`. Con `--sin-ia` (o `?ia=0`) solo muestra los números, sin pedir recomendaciones.
+
+Necesitás unas cuantas conversaciones para que los números digan algo: los tipos de mensaje con menos de 5 casos se marcan con ⚠️.
+
+## 9. Ajustes útiles
 
 - **Personalidad, método y reglas** del setter: `src/agent/prompt.ts`.
 - **Velocidad vs. calidad**: `CLAUDE_EFFORT=low` es rápido y alcanza para chat; subilo a `medium` si querés respuestas más elaboradas.
@@ -155,5 +189,6 @@ src/engine.ts                 ← junta mensajes, procesa audios/imágenes, env�
 src/agent/setter.ts           ← loop con Claude
 src/agent/prompt.ts           ← personalidad y método de venta
 src/agent/tools.ts            ← herramientas (lead, agenda, flows, derivar)
+src/analytics/                ← análisis de cuellos de botella
 src/integrations/             ← ManyChat, Cal.com, transcripción, descarga de adjuntos
 ```

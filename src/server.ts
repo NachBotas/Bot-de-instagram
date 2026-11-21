@@ -1,8 +1,12 @@
 import { timingSafeEqual } from "node:crypto";
+import Anthropic from "@anthropic-ai/sdk";
 import express, { type NextFunction, type Request, type Response } from "express";
+import { loadBusiness } from "./agent/automations.js";
+import { correrAnalisis } from "./analytics/run.js";
 import { buildApp, log } from "./app.js";
 import { config } from "./config.js";
 import { parseInbound } from "./inbound.js";
+import { registrarEtapa } from "./store.js";
 
 function safeEqual(a: string, b: string): boolean {
   const ab = Buffer.from(a);
@@ -77,7 +81,7 @@ async function main() {
       prev = l.etapa;
       l.booking = { ...l.booking, start };
       if (email) l.email = email;
-      l.etapa = "agendado";
+      registrarEtapa(l, "agendado");
     });
     if (!lead) {
       res.status(200).json({ ok: false, reason: "lead desconocido" });
@@ -124,7 +128,7 @@ async function main() {
     server.post("/admin/leads/:id/resume", requireAdmin, async (req, res) => {
       const lead = await engine.updateLead(String(req.params.id), (l) => {
         l.paused = false;
-        if (l.etapa === "humano") l.etapa = "conversando";
+        if (l.etapa === "humano") registrarEtapa(l, "conversando");
       });
       if (!lead) {
         res.status(404).json({ error: "no existe" });
@@ -132,6 +136,21 @@ async function main() {
       }
       await manychat.removeTag(lead.subscriberId, config.PAUSE_TAG).catch(() => undefined);
       res.json({ ok: true });
+    });
+    /** Cuellos de botella: ?dias=30 para acotar, ?ia=0 para no pedir recomendaciones, ?formato=md para texto. */
+    server.get("/admin/analisis", requireAdmin, async (req, res) => {
+      const dias = Number(req.query.dias);
+      const result = await correrAnalisis({
+        store,
+        client: new Anthropic(),
+        model: config.CLAUDE_MODEL,
+        dataDir: config.DATA_DIR,
+        negocio: await loadBusiness(config.BUSINESS_FILE).catch(() => ""),
+        dias: dias > 0 ? dias : undefined,
+        recomendaciones: req.query.ia !== "0",
+      });
+      if (req.query.formato === "md") res.type("text/markdown").send(result.markdown);
+      else res.json(result);
     });
     server.delete("/admin/leads/:id", requireAdmin, async (req, res) => {
       await store.delete(String(req.params.id));

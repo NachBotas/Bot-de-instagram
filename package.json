@@ -9,7 +9,8 @@
     "build": "tsc",
     "chat": "tsx src/scripts/chat.ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "analisis": "tsx src/scripts/analisis.ts"
   },
   "repository": {
     "type": "git",
