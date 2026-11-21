@@ -1,0 +1,23 @@
+{
+  "_instrucciones": "Cada automatización es un Flow de ManyChat que el bot puede disparar. 'flow_ns' es el ID del flow: abrí el flow en ManyChat y copialo de la URL (algo como content20241121123456_123456). 'cuando_usar' le explica al bot en qué momento dispararlo. Borrá las que no uses y agregá las tuyas.",
+  "automatizaciones": [
+    {
+      "clave": "recurso_gratis",
+      "flow_ns": "content00000000000000_000000",
+      "descripcion": "Envía el recurso gratuito (guía / clase grabada) con un botón de descarga.",
+      "cuando_usar": "Cuando el lead NO califica para la llamada, o pide algo para empezar por su cuenta."
+    },
+    {
+      "clave": "testimonios",
+      "flow_ns": "content00000000000000_000001",
+      "descripcion": "Envía 2-3 capturas/videos de resultados de clientes.",
+      "cuando_usar": "Cuando el lead duda de si funciona, pide pruebas o resultados."
+    },
+    {
+      "clave": "video_presentacion",
+      "flow_ns": "content00000000000000_000002",
+      "descripcion": "Envía el video corto explicando cómo trabajamos.",
+      "cuando_usar": "Cuando el lead pregunta cómo funciona el programa o qué incluye, antes de proponer la llamada."
+    }
+  ]
+}
