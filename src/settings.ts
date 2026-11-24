@@ -44,6 +44,9 @@ export const AjustesSchema = z.object({
       calEventTypeId: z.string().default(""),
       zonaHoraria: z.string().default("America/Argentina/Buenos_Aires"),
       flowConfirmacion: z.string().default(""),
+      /** Calendly conectado por API para enterarse cuando alguien agenda. */
+      calendlyToken: z.string().default(""),
+      calendlyWebhook: z.string().default(""),
     })
     .prefault({}),
   negocio: z.string().default(""),
@@ -80,6 +83,38 @@ export const AjustesSchema = z.object({
       esperaSeg: z.number().min(0).max(60).default(7),
       pausaMs: z.number().min(0).max(10000).default(1500),
       maxBurbujas: z.number().int().min(1).max(6).default(4),
+      /** Demora extra al azar antes de responder, para no parecer un robot (segundos). */
+      demoraMinSeg: z.number().min(0).max(1800).default(0),
+      demoraMaxSeg: z.number().min(0).max(1800).default(0),
+    })
+    .prefault({}),
+  /** Horario de atención: fuera de horario, los mensajes esperan hasta que abra. */
+  horario: z
+    .object({
+      activo: z.boolean().default(false),
+      /** 0 = domingo … 6 = sábado */
+      dias: z.array(z.number().int().min(0).max(6)).default([1, 2, 3, 4, 5]),
+      desde: z.string().regex(/^\d{2}:\d{2}$/).default("09:00"),
+      hasta: z.string().regex(/^\d{2}:\d{2}$/).default("21:00"),
+    })
+    .prefault({}),
+  /** Contactos que el bot no tiene que responder (además del tag de pausa). */
+  excluir: z.object({ tags: z.array(z.string()).default([]) }).prefault({}),
+  /** Qué hacer si algo falla (Claude sin saldo, ManyChat caído…). */
+  errores: z
+    .object({
+      enviarRespaldo: z.boolean().default(true),
+      mensajeRespaldo: z.string().default("¡Hola! Ya te respondo en un ratito 🙌"),
+    })
+    .prefault({}),
+  /** Aviso cuando el gasto del mes en Claude supera este monto (0 = sin aviso). */
+  gasto: z.object({ topeMensualUsd: z.number().min(0).default(0) }).prefault({}),
+  /** Responder con notas de voz (ElevenLabs). */
+  voz: z
+    .object({
+      modo: z.enum(["nunca", "si_audio", "siempre"]).default("nunca"),
+      elevenlabsKey: z.string().default(""),
+      vozId: z.string().default(""),
     })
     .prefault({}),
   tunel: z
@@ -100,6 +135,8 @@ export const CAMPOS_SECRETOS = [
   "audios.claves.deepgram",
   "agenda.calApiKey",
   "tunel.authtoken",
+  "voz.elevenlabsKey",
+  "agenda.calendlyToken",
 ] as const;
 
 const get = (o: unknown, p: string): unknown => p.split(".").reduce<unknown>((a, k) => (a as Record<string, unknown>)?.[k], o);

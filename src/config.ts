@@ -27,6 +27,14 @@ const EnvSchema = z.object({
   PANEL_PORT: num(4000),
   PANEL_HOST: z.string().default("127.0.0.1"),
   PANEL_PASSWORD: optStr,
+  /**
+   * Modo nube: panel y webhooks en un solo puerto, con inicio de sesión obligatorio.
+   * Se activa solo en Railway/Render, o con NUBE=true.
+   */
+  NUBE: z
+    .string()
+    .optional()
+    .transform((v) => (v ? ["1", "true", "si", "sí", "yes"].includes(v.toLowerCase()) : !!(process.env.RAILWAY_ENVIRONMENT || process.env.RENDER))),
 
   // Seguridad
   WEBHOOK_SECRET: optStr,

@@ -7,6 +7,10 @@ let flowsCache = null; // { flows, folders }
 let vista = "inicio";
 let chatSesion = String(Date.now());
 let ultimasConsultas = null;
+let SESION = null; // { auth, usuario, cuentas, nube }
+let cuentaActual = null;
+const NIVEL = { agente: 0, editor: 1, admin: 2 };
+const puede = (rol) => SESION && NIVEL[SESION.usuario.rol] >= NIVEL[rol];
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -23,6 +27,7 @@ function toast(msg) {
 
 async function api(path, opts = {}) {
   const init = { method: opts.method ?? "GET", headers: { "x-panel": "1" } };
+  if (cuentaActual) init.headers["x-cuenta"] = cuentaActual;
   if (opts.body !== undefined) {
     if (opts.raw) {
       init.body = opts.body;
@@ -33,10 +38,100 @@ async function api(path, opts = {}) {
     }
   }
   const res = await fetch(path, init);
+  if (opts.blob && res.ok) return res.blob();
   const ct = res.headers.get("content-type") || "";
   const data = ct.includes("json") ? await res.json() : await res.text();
+  if (res.status === 401 && data && data.login) {
+    mostrarLogin();
+    throw new Error("Iniciá sesión");
+  }
   if (!res.ok) throw new Error((data && data.error) || `Error ${res.status}`);
   return data;
+}
+
+// ------------------------------------------------------------------ sesión y cuentas
+
+function mostrarLogin() {
+  $("#layout").classList.add("hidden");
+  $("#login").classList.remove("hidden");
+  $("#login-usuario").focus();
+}
+
+$("#login-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const err = $("#login-error");
+  err.classList.add("hidden");
+  try {
+    await api("/api/login", { method: "POST", body: { usuario: $("#login-usuario").value, clave: $("#login-clave").value } });
+    $("#login").classList.add("hidden");
+    $("#layout").classList.remove("hidden");
+    await arrancar();
+  } catch (e) {
+    err.textContent = e.message;
+    err.classList.remove("hidden");
+  }
+});
+
+async function arrancar() {
+  SESION = await api("/api/sesion");
+  if (!SESION.usuario) return mostrarLogin();
+  let guardada = null;
+  try {
+    guardada = localStorage.getItem("setter-cuenta");
+  } catch {
+    /* sin almacenamiento: usamos la primera cuenta */
+  }
+  cuentaActual = SESION.cuentas.some((c) => c.id === guardada) ? guardada : (SESION.cuentas[0]?.id ?? null);
+  pintarCuentas();
+  // Menú según el rol del usuario.
+  document.querySelectorAll("#nav button[data-v]").forEach((b) => b.classList.toggle("hidden", !puede(b.dataset.rol || "agente")));
+  const u = SESION.usuario;
+  $("#yo").innerHTML = SESION.auth
+    ? `<b>${esc(u.nombre)}</b>${esc({ admin: "Administrador", editor: "Editor", agente: "Agente" }[u.rol])}<br>
+       <button id="btn-clave">Cambiar contraseña</button> · <button id="btn-salir">Salir</button>`
+    : `<span>Sin usuarios: cualquiera en esta compu entra directo. Podés crear tu equipo en "Equipo y cuentas".</span>`;
+  $("#btn-salir")?.addEventListener("click", async () => {
+    await api("/api/logout", { method: "POST", body: {} });
+    location.reload();
+  });
+  $("#btn-clave")?.addEventListener("click", cambiarMiClave);
+  const boton = $(`#nav button[data-v="${vista}"]`);
+  if (!boton || boton.classList.contains("hidden")) vista = "inicio";
+  irA(vista);
+}
+
+function pintarCuentas() {
+  const sel = $("#cuenta-select");
+  sel.innerHTML = SESION.cuentas
+    .map((c) => `<option value="${esc(c.id)}" ${c.id === cuentaActual ? "selected" : ""}>${c.botActivo ? "🟢" : "⚪"} ${esc(c.nombre)}</option>`)
+    .join("");
+  $("#cuenta-box").classList.toggle("hidden", SESION.cuentas.length < 2);
+}
+
+$("#cuenta-select").addEventListener("change", (ev) => {
+  cuentaActual = ev.target.value;
+  try {
+    localStorage.setItem("setter-cuenta", cuentaActual);
+  } catch {
+    /* sin almacenamiento: no pasa nada */
+  }
+  flowsCache = null;
+  chatSesion = String(Date.now());
+  ultimasConsultas = null;
+  irA(vista);
+});
+
+async function cambiarMiClave() {
+  const actual = prompt("Tu contraseña actual:");
+  if (!actual) return;
+  const nueva = prompt("La contraseña nueva (mínimo 8 caracteres):");
+  if (!nueva) return;
+  try {
+    await api("/api/mi-clave", { method: "POST", body: { actual, nueva } });
+    toast("Contraseña cambiada ✓");
+  } catch (e) {
+    toast(e.message);
+  }
 }
 
 async function guardar(mutar, okMsg = "Guardado ✓") {
@@ -85,7 +180,13 @@ function irA(v) {
 $$("#nav button").forEach((b) => b.addEventListener("click", () => irA(b.dataset.v)));
 
 async function refrescarEstado() {
+  if (!SESION?.usuario) return;
   E = await api("/api/estado");
+  const cuenta = SESION.cuentas.find((x) => x.id === E.cuenta);
+  if (cuenta && cuenta.botActivo !== E.botActivo) {
+    cuenta.botActivo = E.botActivo;
+    pintarCuentas();
+  }
   const n = E.numeros.consultasPendientes;
   const badge = $("#badge-consultas");
   badge.textContent = n;
@@ -125,25 +226,29 @@ VISTAS.inicio = async () => {
 
     <div class="card toggle-big">
       <div>
-        <h2 style="margin:0">${E.botActivo ? "🟢 El bot está respondiendo" : "⚪ El bot está apagado"}</h2>
+        <h2 style="margin:0">${E.botActivo ? (E.horario && !E.horario.abierto ? "🌙 Fuera de horario: responde cuando abra" : "🟢 El bot está respondiendo") : "⚪ El bot está apagado"}</h2>
         <div class="hint">${
           E.botActivo
-            ? "Responde automáticamente mientras esta compu esté prendida y esta ventana de la app abierta."
+            ? E.nube
+              ? "Está en la nube: responde las 24 horas aunque tu compu esté apagada."
+              : "Responde automáticamente mientras esta compu esté prendida y esta ventana de la app abierta."
             : "Cuando lo actives, va a responder los DMs que le mande ManyChat."
         }</div>
       </div>
-      <label class="switch" title="Activar / apagar el bot"><input type="checkbox" id="bot-toggle" ${E.botActivo ? "checked" : ""}><span class="slider"></span></label>
+      ${puede("editor") ? `<label class="switch" title="Activar / apagar el bot"><input type="checkbox" id="bot-toggle" ${E.botActivo ? "checked" : ""}><span class="slider"></span></label>` : ""}
     </div>
 
+    ${E.alertas.map((a) => `<div class="alert bad">🚨 ${esc(a.texto)} <span class="hint">(${new Date(a.at).toLocaleString("es-AR", { timeStyle: "short", dateStyle: "short" })})</span></div>`).join("")}
     ${E.advertencias.map((w) => `<div class="alert warn">⚠️ ${esc(w)}</div>`).join("")}
-    ${E.numeros.consultasPendientes ? `<div class="alert warn">🔔 Tenés ${E.numeros.consultasPendientes} consulta(s) que el bot no supo responder. <a href="#" data-ir="consultas">Responder</a></div>` : ""}
+    ${E.numeros.consultasPendientes ? `<div class="alert warn">🔔 Tenés ${E.numeros.consultasPendientes} aviso(s) pendientes en Consultas. <a href="#" data-ir="consultas">Ver</a></div>` : ""}
 
     <div class="grid" style="margin-bottom:16px">
       <div class="stat"><b>${E.numeros.activasHoy}</b><span>conversaciones hoy</span></div>
-      <div class="stat"><b>${E.numeros.conversaciones}</b><span>conversaciones en total</span></div>
-      <div class="stat"><b>${E.numeros.agendadas}</b><span>llamadas agendadas</span></div>
-      <div class="stat"><b>${E.numeros.consultasPendientes}</b><span>consultas pendientes</span></div>
+      <div class="stat"><b>${E.numeros.agendadasSemana}</b><span>llamadas agendadas esta semana</span></div>
+      <div class="stat"><b>${E.numeros.agendadasMes}</b><span>agendadas este mes</span></div>
+      <div class="stat"><b>USD ${E.gasto.usdMes.toFixed(2)}</b><span>gasto de Claude este mes${E.gasto.tope ? ` (tope ${E.gasto.tope})` : ""}</span></div>
     </div>
+    ${c.agendaModo === "link" && !c.calendly ? `<p class="hint" style="margin-top:-6px">Para contar las llamadas agendadas, conectá Calendly o Cal.com en <a href="#" data-ir="agenda">Agenda</a>.</p>` : ""}
 
     <div class="card">
       <h2>Conexiones</h2>
@@ -151,12 +256,12 @@ VISTAS.inicio = async () => {
         <div><div class="hint">Claude</div>${c.claude ? pill(ch.claude?.ok, "Conectado", "Error") : '<span class="pill warn">Falta configurar</span>'}</div>
         <div><div class="hint">ManyChat</div>${c.manychat ? pill(ch.manychat?.ok, "Conectado", "Error") : '<span class="pill warn">Falta configurar</span>'}</div>
         <div><div class="hint">Audios</div>${c.audios ? pill(ch.audios?.ok, "Funcionando", "Error", "Configurado") : '<span class="pill off">Apagados</span>'}</div>
-        <div><div class="hint">Conexión a internet</div>${E.tunel.url || E.webhook.url ? '<span class="pill ok">● Abierta</span>' : E.tunel.error ? '<span class="pill bad">● Error</span>' : '<span class="pill off">Cerrada</span>'}</div>
+        <div><div class="hint">Conexión a internet</div>${E.nube ? '<span class="pill ok">● En la nube</span>' : E.tunel.url ? '<span class="pill ok">● Abierta</span>' : E.tunel.error ? '<span class="pill bad">● Error</span>' : '<span class="pill off">Cerrada</span>'}</div>
       </div>
-      <div class="row" style="margin-top:12px"><button class="btn small" id="probar-todo">Probar conexiones</button></div>
+      ${puede("editor") ? '<div class="row" style="margin-top:12px"><button class="btn small" id="probar-todo">Probar conexiones</button></div>' : ""}
     </div>
 
-    <div class="card">
+    <div class="card ${puede("editor") ? "" : "hidden"}">
       <h2>Primeros pasos</h2>
       <ol class="steps">
         ${pasos.map(([t, ok, v]) => `<li class="${ok ? "done" : ""}"><div class="row"><span class="grow">${esc(t)}</span><button class="btn small" data-ir="${v}">${ok ? "Ver" : "Ir"}</button></div></li>`).join("")}
@@ -170,7 +275,7 @@ VISTAS.inicio = async () => {
       <button class="btn small" id="notif">${"Notification" in window && Notification.permission === "granted" ? "Avisos activados ✓" : "Activar avisos"}</button>
     </div>`;
 
-  $("#bot-toggle").addEventListener("change", async (e) => {
+  $("#bot-toggle")?.addEventListener("change", async (e) => {
     const activo = e.target.checked;
     if (activo && (!c.claude || !c.manychat)) {
       if (!confirm("Todavía falta conectar Claude o ManyChat. ¿Activarlo igual?")) {
@@ -182,7 +287,7 @@ VISTAS.inicio = async () => {
     toast(activo ? "Bot activado" : "Bot apagado");
     render();
   });
-  $("#probar-todo").addEventListener("click", async (e) => {
+  $("#probar-todo")?.addEventListener("click", async (e) => {
     e.target.disabled = true;
     e.target.textContent = "Probando…";
     if (c.claude) await api("/api/probar/claude", { method: "POST", body: {} }).catch(() => {});
@@ -260,18 +365,60 @@ VISTAS.negocio = async () => {
       <p class="hint">Pegá acá tu prompt o escribí qué vendés, para quién es, preguntas frecuentes, objeciones, tono… como se lo explicarías a un setter nuevo. Las preguntas y las reglas de "si dice esto, hacé esto" van en <a href="#" data-ir="guion">Guion</a>.</p>
       <textarea class="big" id="negocio">${esc(A.negocio)}</textarea>
       <div class="row" style="margin-top:10px"><button class="btn primary" id="guardar-negocio">Guardar</button></div>
-    </div>
+    </div>`;
+  $("#plantilla").addEventListener("click", async () => {
+    if ($("#negocio").value.trim() && !confirm("¿Reemplazar lo que escribiste por la plantilla?")) return;
+    $("#negocio").value = await api("/api/plantilla-negocio");
+  });
+  $("#guardar-negocio").addEventListener("click", () => guardar((a) => (a.negocio = $("#negocio").value)));
+};
+
+// ------------------------------------------------------------------ COMPORTAMIENTO
+
+const DIAS = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
+
+VISTAS.comportamiento = async () => {
+  A = await api("/api/ajustes");
+  const g = await api("/api/gasto");
+  const c = A.comportamiento;
+  const h = A.horario;
+  const maxDia = Math.max(0.0001, ...g.ultimosDias.map((d) => d.usd));
+  main().innerHTML = `
+    <h1>Comportamiento</h1>
+    <p class="sub">Cuándo y cómo responde el bot, a quién no responderle y qué hacer si algo falla.</p>
+
     <div class="card">
-      <h2>Comportamiento</h2>
+      <h2>Tiempos</h2>
       <div class="grid">
         <div><label>Espera antes de responder (seg)<div class="hint">Por si el lead manda varios mensajes seguidos.</div></label>
-          <input type="number" id="espera" min="0" max="60" value="${A.comportamiento.esperaSeg}"></div>
+          <input type="number" id="espera" min="0" max="60" value="${c.esperaSeg}"></div>
         <div><label>Pausa entre burbujas (ms)<div class="hint">Para que parezca alguien escribiendo.</div></label>
-          <input type="number" id="pausa" min="0" max="10000" step="100" value="${A.comportamiento.pausaMs}"></div>
+          <input type="number" id="pausa" min="0" max="10000" step="100" value="${c.pausaMs}"></div>
         <div><label>Máximo de mensajes por respuesta</label>
-          <input type="number" id="burbujas" min="1" max="6" value="${A.comportamiento.maxBurbujas}"></div>
+          <input type="number" id="burbujas" min="1" max="6" value="${c.maxBurbujas}"></div>
       </div>
-      <h3>Seguimiento automático</h3>
+      <h3>Demora "humana"</h3>
+      <p class="hint">Además de la espera, el bot tarda un tiempo al azar entre estos dos valores antes de contestar, para no responder al instante como un robot. En 0 no hay demora.</p>
+      <div class="grid">
+        <div><label>Mínimo (segundos)</label><input type="number" id="demora-min" min="0" max="1800" value="${c.demoraMinSeg}"></div>
+        <div><label>Máximo (segundos)</label><input type="number" id="demora-max" min="0" max="1800" value="${c.demoraMaxSeg}"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row"><h2 class="grow" style="margin:0">Horario de atención</h2>
+        <label class="switch small"><input type="checkbox" id="h-activo" ${h.activo ? "checked" : ""}><span class="slider"></span></label></div>
+      <p class="hint">Fuera de este horario el bot no responde: los mensajes esperan y los contesta apenas abre (Instagram deja responder hasta 24 h después). Usa la zona horaria de la sección Agenda (${esc(A.agenda.zonaHoraria)}).</p>
+      <label>Días</label>
+      <div class="dias">${DIAS.map((d, i) => `<label><input type="checkbox" data-dia="${i}" ${h.dias.includes(i) ? "checked" : ""}> ${d}</label>`).join("")}</div>
+      <div class="grid">
+        <div><label>Desde</label><input type="time" id="h-desde" value="${esc(h.desde)}"></div>
+        <div><label>Hasta</label><input type="time" id="h-hasta" value="${esc(h.hasta)}"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Seguimiento automático</h2>
       <div class="row"><label class="switch small"><input type="checkbox" id="seg-activo" ${A.seguimientos.activo ? "checked" : ""}><span class="slider"></span></label>
         <span>Si el lead deja de responder, escribirle de nuevo</span></div>
       <div class="grid">
@@ -279,17 +426,59 @@ VISTAS.negocio = async () => {
         <div><label>Cuántas veces como máximo</label><input type="number" id="seg-max" min="0" max="3" value="${A.seguimientos.max}"></div>
       </div>
       <p class="hint">Instagram solo deja escribir hasta 24 h después del último mensaje del lead.</p>
-      <div class="row" style="margin-top:10px"><button class="btn primary" id="guardar-comp">Guardar</button></div>
-    </div>`;
-  $("#plantilla").addEventListener("click", async () => {
-    if ($("#negocio").value.trim() && !confirm("¿Reemplazar lo que escribiste por la plantilla?")) return;
-    $("#negocio").value = await api("/api/plantilla-negocio");
-  });
-  $("#guardar-negocio").addEventListener("click", () => guardar((a) => (a.negocio = $("#negocio").value)));
+    </div>
+
+    <div class="card">
+      <h2>A quién no responderle</h2>
+      <p class="hint">El bot ignora a los contactos que tengan alguno de estos tags en ManyChat (por ejemplo tus clientes, amigos o proveedores). Separalos con comas. Además, siempre ignora a los que tengan el tag <code>bot_pausado</code>.</p>
+      <input type="text" id="excluir" value="${esc(A.excluir.tags.join(", "))}" placeholder="cliente, amigo, proveedor">
+      <details><summary>¿Y si respondo yo desde ManyChat?</summary>
+        <p class="hint">ManyChat no le avisa a la app cuando contestás vos, así que el bot no se entera solo. Para que no se meta: en el Live Chat de ManyChat ponele al contacto el tag <code>bot_pausado</code> (o pausalo desde Conversaciones, por unas horas o para siempre). Cuando le saques el tag, el bot vuelve a responder.</p>
+      </details>
+    </div>
+
+    <div class="card">
+      <h2>Si algo falla</h2>
+      <p class="hint">Si Claude se queda sin saldo o ManyChat da error, te aviso en Inicio y en Consultas (con un botón para reintentar). Mientras, el lead no queda en visto:</p>
+      <div class="row"><label class="switch small"><input type="checkbox" id="err-activo" ${A.errores.enviarRespaldo ? "checked" : ""}><span class="slider"></span></label>
+        <span>Mandarle este mensaje al lead (como mucho uno cada 6 h)</span></div>
+      <input type="text" id="err-mensaje" value="${esc(A.errores.mensajeRespaldo)}" style="margin-top:8px">
+    </div>
+
+    <div class="card">
+      <h2>Gasto de Claude</h2>
+      <div class="grid">
+        <div class="stat"><b>USD ${g.usdMes.toFixed(2)}</b><span>este mes (${g.respuestas} respuestas)</span></div>
+        <div class="stat"><b>USD ${g.usdHoy.toFixed(2)}</b><span>hoy</span></div>
+        <div class="stat"><b>${g.audios}</b><span>audios transcriptos este mes</span></div>
+      </div>
+      <div class="barras" title="Últimos 14 días">${g.ultimosDias.map((d) => `<div style="height:${Math.round((d.usd / maxDia) * 100)}%" title="${d.dia}: USD ${d.usd.toFixed(3)}"></div>`).join("")}</div>
+      <p class="hint">Últimos 14 días. Calculado con los tokens reales de cada respuesta y los precios de lista: puede diferir en centavos de la factura de Anthropic.</p>
+      <label>Avisarme si el mes supera (USD)<div class="hint">0 = sin aviso. El bot no se apaga, solo te avisa en Inicio.</div></label>
+      <input type="number" id="tope" min="0" step="1" value="${A.gasto.topeMensualUsd}">
+    </div>
+
+    <div class="row"><button class="btn primary" id="guardar-comp">Guardar todo</button></div>`;
+
   $("#guardar-comp").addEventListener("click", () =>
     guardar((a) => {
-      a.comportamiento = { esperaSeg: +$("#espera").value, pausaMs: +$("#pausa").value, maxBurbujas: +$("#burbujas").value };
+      a.comportamiento = {
+        esperaSeg: +$("#espera").value,
+        pausaMs: +$("#pausa").value,
+        maxBurbujas: +$("#burbujas").value,
+        demoraMinSeg: +$("#demora-min").value,
+        demoraMaxSeg: +$("#demora-max").value,
+      };
+      a.horario = {
+        activo: $("#h-activo").checked,
+        dias: [...document.querySelectorAll("[data-dia]")].filter((x) => x.checked).map((x) => +x.dataset.dia),
+        desde: $("#h-desde").value || "09:00",
+        hasta: $("#h-hasta").value || "21:00",
+      };
       a.seguimientos = { activo: $("#seg-activo").checked, horas: +$("#seg-horas").value, max: +$("#seg-max").value };
+      a.excluir = { tags: $("#excluir").value.split(",").map((t) => t.trim()).filter(Boolean) };
+      a.errores = { enviarRespaldo: $("#err-activo").checked, mensajeRespaldo: $("#err-mensaje").value.trim() };
+      a.gasto = { topeMensualUsd: +$("#tope").value || 0 };
     }),
   );
 };
@@ -659,15 +848,21 @@ VISTAS.consultas = async () => {
         ? pendientes
             .map(
               (c) => `<div class="card">
-        <div class="row"><span class="pill ${c.tipo === "consulta" ? "warn" : "bad"}">${c.tipo === "consulta" ? "No sabe responder" : "Pidió una persona"}</span>
+        <div class="row"><span class="pill ${c.tipo === "consulta" ? "warn" : "bad"}">${{ consulta: "No sabe responder", derivacion: "Pidió una persona", error: "Error del bot" }[c.tipo]}</span>
           <b class="grow">${esc(c.nombre || c.username || c.leadId)}${c.username ? ` <span class="hint">@${esc(c.username)}</span>` : ""}</b>
           <span class="hint">${fecha(c.creada)}</span></div>
-        <h3>${c.tipo === "consulta" ? "Pregunta" : "Motivo"}: ${esc(c.texto)}</h3>
+        <h3>${{ consulta: "Pregunta", derivacion: "Motivo", error: "Qué pasó" }[c.tipo]}: ${esc(c.texto)}</h3>
         ${c.ultimoMensaje ? `<p class="hint">Último mensaje del lead: "${esc(c.ultimoMensaje)}"</p>` : ""}
+        ${
+          c.tipo === "error"
+            ? `<p class="hint">Este lead quedó sin respuesta. Arreglá el problema (por ejemplo, cargando saldo) y tocá <b>Reintentar</b>, o respondele vos abajo.</p>
+               <div class="row" style="margin-bottom:10px"><button class="btn primary" data-reintentar="${c.id}">Reintentar</button></div>`
+            : ""
+        }
         <textarea data-resp="${c.id}" style="min-height:70px" placeholder="Escribí la respuesta para el lead…"></textarea>
         <div class="row" style="margin-top:8px">
           <label class="row" style="font-weight:400;margin:0"><input type="checkbox" data-enviar="${c.id}" checked> Mandársela al lead</label>
-          ${c.tipo === "consulta" ? `<label class="row" style="font-weight:400;margin:0"><input type="checkbox" data-guardar="${c.id}" checked> Guardarla para que el bot la sepa la próxima vez</label>` : ""}
+          ${c.tipo === "consulta" && puede("editor") ? `<label class="row" style="font-weight:400;margin:0"><input type="checkbox" data-guardar="${c.id}" checked> Guardarla para que el bot la sepa la próxima vez</label>` : ""}
           ${c.tipo === "derivacion" ? `<label class="row" style="font-weight:400;margin:0"><input type="checkbox" data-reactivar="${c.id}"> Volver a activar el bot para este lead</label>` : ""}
         </div>
         <div class="row" style="margin-top:10px"><button class="btn primary" data-responder="${c.id}">Responder</button>
@@ -716,6 +911,21 @@ VISTAS.consultas = async () => {
     }),
   );
   $$("[data-ver]").forEach((b) => b.addEventListener("click", () => verConversacion(b.dataset.ver)));
+  $$("[data-reintentar]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      b.disabled = true;
+      b.textContent = "Reintentando…";
+      try {
+        const r = await api(`/api/consultas/${b.dataset.reintentar}/reintentar`, { method: "POST", body: {} });
+        toast(r.ok ? "Listo, el bot le respondió ✓" : "El bot decidió no responder");
+        render();
+      } catch (e) {
+        toast(`Sigue fallando: ${e.message}`);
+        b.disabled = false;
+        b.textContent = "Reintentar";
+      }
+    }),
+  );
 };
 
 // ------------------------------------------------------------------ CONVERSACIONES
@@ -762,8 +972,20 @@ async function verConversacion(id) {
     <p class="sub">${l.username ? `@${esc(l.username)} · ` : ""}${pillEtapa(l.etapa)}${l.email ? ` · ${esc(l.email)}` : ""}${l.booking?.start ? ` · 📅 ${new Date(l.booking.start).toLocaleString("es-AR")}` : ""}</p>
     <div class="card toggle-big">
       <div><b>${l.paused ? "⏸️ Bot pausado para este lead" : "🤖 El bot responde a este lead"}</b>
-        <div class="hint">${l.paused ? "Respondé vos desde ManyChat (Live Chat). Reactivalo cuando termines." : "Pausalo si querés responder vos."}</div></div>
-      <button class="btn" id="pausa">${l.paused ? "Reactivar bot" : "Pausar bot"}</button>
+        <div class="hint">${
+          l.paused
+            ? l.pausadoHasta
+              ? `Vuelve a responder solo el ${new Date(l.pausadoHasta).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" })}.`
+              : "Respondé vos desde ManyChat (Live Chat). Reactivalo cuando termines."
+            : "Pausalo si querés responder vos."
+        }</div></div>
+      ${
+        l.paused
+          ? `<button class="btn" data-pausa="0">Reactivar bot</button>`
+          : `<div class="row"><select id="pausa-horas" style="width:auto">
+               <option value="1">1 hora</option><option value="4">4 horas</option><option value="24" selected>24 horas</option><option value="0">Hasta que lo reactive</option>
+             </select><button class="btn" data-pausa="1">Pausar bot</button></div>`
+      }
     </div>
     ${perfil.length ? `<div class="card"><h2>Lo que averiguó el bot</h2>${perfil.map(([k, v]) => `<div><b>${esc(k)}:</b> ${esc(v)}</div>`).join("")}</div>` : ""}
     <div class="card"><div class="chat" style="max-height:none">${
@@ -777,8 +999,11 @@ async function verConversacion(id) {
         )
         .join("") || '<div class="empty">Sin mensajes.</div>'
     }</div></div>`;
-  $("#pausa").addEventListener("click", async () => {
-    await api(`/api/conversaciones/${encodeURIComponent(id)}/pausa`, { method: "POST", body: { pausar: !l.paused } });
+  $("[data-pausa]").addEventListener("click", async (ev) => {
+    const pausar = ev.target.dataset.pausa === "1";
+    const horas = pausar ? +$("#pausa-horas").value : 0;
+    await api(`/api/conversaciones/${encodeURIComponent(id)}/pausa`, { method: "POST", body: { pausar, horas } });
+    toast(pausar ? (horas ? `Bot pausado por ${horas} h` : "Bot pausado") : "Bot reactivado");
     verConversacion(id);
   });
 }
@@ -837,7 +1062,50 @@ VISTAS.audios = async () => {
       <p class="hint">Subí una nota de voz (mp3, m4a, ogg, mp4…) y fijate si la transcribe bien.</p>
       <div class="row"><input type="file" id="archivo" accept="audio/*,video/*"><button class="btn" id="probar-audio">Transcribir</button></div>
       <pre class="mono hidden" id="resultado-audio"></pre>
+    </div>
+    <div class="card">
+      <h2>Responder con notas de voz</h2>
+      <p class="hint">El bot puede contestar con una nota de voz, con una voz de ElevenLabs o con <b>tu propia voz clonada</b>. Los mensajes con links (como la agenda) siempre van por escrito.</p>
+      <label>¿Cuándo responder con audio?</label>
+      <select id="voz-modo">
+        <option value="nunca" ${A.voz.modo === "nunca" ? "selected" : ""}>Nunca (solo texto)</option>
+        <option value="si_audio" ${A.voz.modo === "si_audio" ? "selected" : ""}>Cuando el lead me manda un audio</option>
+        <option value="siempre" ${A.voz.modo === "siempre" ? "selected" : ""}>Siempre</option>
+      </select>
+      <h3>Cómo configurarlo</h3>
+      <ol class="steps">
+        <li>Creá una cuenta en <a href="https://elevenlabs.io" target="_blank" rel="noopener">elevenlabs.io</a>. Para clonar tu voz hace falta un plan pago (desde unos USD 5 por mes).</li>
+        <li>Para usar tu voz: <b>Voices → Add a new voice → Instant Voice Clone</b> y subí 1–2 minutos de audio tuyo hablando natural. Si no, elegí una voz de su biblioteca.</li>
+        <li>Copiá el <b>ID de la voz</b> (en la voz, botón de los tres puntos → "Copy voice ID") y pegalo abajo.</li>
+        <li>En tu perfil → <b>API Keys</b> creá una key y pegala abajo.</li>
+      </ol>
+      <label>API key de ElevenLabs</label>${inputSecreto("voz-key", A.voz.elevenlabsKey, "sk_…")}
+      <label>ID de la voz</label><input type="text" id="voz-id" value="${esc(A.voz.vozId)}" placeholder="21m00Tcm4TlvDq8ikWAM">
+      <p class="hint">Para mandar audios, ManyChat necesita descargarlos desde tu app: hace falta tener la conexión con internet abierta (o estar en la nube).</p>
+      <div class="row" style="margin-top:12px"><button class="btn primary" id="guardar-voz">Guardar</button>
+        <button class="btn" id="probar-voz">Escuchar cómo suena</button></div>
+      <audio id="voz-audio" controls class="hidden" style="width:100%;margin-top:10px"></audio>
     </div>`;
+  $("#guardar-voz").addEventListener("click", () =>
+    guardar((a) => {
+      a.voz = { modo: $("#voz-modo").value, elevenlabsKey: leerSecreto("voz-key", a.voz.elevenlabsKey), vozId: $("#voz-id").value.trim() };
+    }),
+  );
+  $("#probar-voz").addEventListener("click", async (ev) => {
+    ev.target.disabled = true;
+    ev.target.textContent = "Generando…";
+    try {
+      const blob = await api("/api/probar/voz", { method: "POST", body: { texto: "¡Hola! Gracias por escribirme. Contame, ¿a qué te dedicás hoy?" }, blob: true });
+      const audio = $("#voz-audio");
+      audio.src = URL.createObjectURL(blob);
+      audio.classList.remove("hidden");
+      audio.play().catch(() => {});
+    } catch (e) {
+      toast(e.message);
+    }
+    ev.target.disabled = false;
+    ev.target.textContent = "Escuchar cómo suena";
+  });
   const pintar = () => {
     const p = $("#proveedor").value;
     const t = PROVEEDORES[p];
@@ -911,7 +1179,40 @@ VISTAS.agenda = async () => {
       <label>Zona horaria de tu negocio</label>
       <input type="text" id="zona" value="${esc(g.zonaHoraria)}" placeholder="America/Argentina/Buenos_Aires">
       <div class="row" style="margin-top:12px"><button class="btn primary" id="guardar-agenda">Guardar</button></div>
+    </div>
+
+    <div class="card" id="saber-agendo">
+      <div class="row"><h2 class="grow" style="margin:0">Enterarse de quién agendó</h2>
+        ${E.configurado.calendly ? '<span class="pill ok">● Calendly conectado</span>' : ""}</div>
+      <p class="hint">Cuando un lead agenda con tu link, Calendly o Cal.com le avisan al bot: el lead pasa a "Agendó", se cuenta en Inicio y, si elegiste un flow de confirmación en Automatizaciones, se dispara. ${g.modo === "calcom" ? "Con Cal.com en modo automático esto ya funciona solo." : ""}</p>
+      ${
+        E.webhook.agenda
+          ? `<h3>Calendly (necesita un plan pago de Calendly)</h3>
+        <ol class="steps">
+          <li>En Calendly andá a <b>Integrations → API and webhooks</b> (o a <a href="https://calendly.com/integrations/api_webhooks" target="_blank" rel="noopener">este link</a>) y generá un <b>Personal Access Token</b>.</li>
+          <li>Pegalo acá y tocá <b>Conectar</b>: la app crea sola el aviso en Calendly.</li>
+        </ol>
+        <div class="row"><input type="password" id="calendly-token" class="grow" placeholder="${g.calendlyToken ? "Token guardado " + esc(g.calendlyToken) : "Pegá el token"}"><button class="btn primary" id="conectar-calendly">Conectar</button></div>
+        <h3>Cal.com (con tu link)</h3>
+        <ol class="steps">
+          <li>En Cal.com andá a <b>Settings → Developer → Webhooks → New</b>.</li>
+          <li>En "Subscriber URL" pegá esta dirección y marcá el evento <b>Booking Created</b>:${copiable(E.webhook.agenda)}</li>
+        </ol>`
+          : `<div class="alert warn">Para esto, la app necesita una dirección en internet: abrí la conexión en <a href="#" data-ir="conexion">Conexión</a> (o subí el bot a la nube).</div>`
+      }
     </div>`;
+  $("#conectar-calendly")?.addEventListener("click", async (ev) => {
+    ev.target.disabled = true;
+    try {
+      const r = await api("/api/calendly", { method: "POST", body: { token: $("#calendly-token").value.trim() } });
+      toast(r.mensaje);
+      await refrescarEstado();
+      VISTAS.agenda();
+    } catch (e) {
+      toast(e.message);
+      ev.target.disabled = false;
+    }
+  });
   const sync = () => {
     const m = $('input[name="modo"]:checked').value;
     $("#modo-link").classList.toggle("hidden", m !== "link");
@@ -934,12 +1235,14 @@ VISTAS.agenda = async () => {
 
 VISTAS.conexion = async () => {
   A = await api("/api/ajustes");
+  // El túnel es de toda la app: solo lo maneja un administrador.
+  const T = !E.nube && puede("admin") ? await api("/api/tunel") : null;
   const ch = E.chequeos;
   const url = E.webhook.url;
   const body = '{ "subscriber_id": "{{user_id}}", "first_name": "{{first_name}}", "username": "{{ig_username}}", "text": "{{last_input_text}}" }';
   main().innerHTML = `
     <h1>Conexión</h1>
-    <p class="sub">Las cuentas que usa el bot. Las claves quedan guardadas solo en esta compu.</p>
+    <p class="sub">Las cuentas que usa el bot${SESION.cuentas.length > 1 ? ` en <b>${esc(SESION.cuentas.find((c) => c.id === cuentaActual)?.nombre ?? "")}</b>` : ""}. Las claves quedan guardadas ${E.nube ? "en tu servidor" : "solo en esta compu"}.</p>
 
     <div class="card">
       <div class="row"><h2 class="grow" style="margin:0">1. Claude (el cerebro)</h2>${pill(ch.claude?.ok, ch.claude?.detalle ?? "", ch.claude?.detalle ?? "")}</div>
@@ -978,23 +1281,30 @@ VISTAS.conexion = async () => {
       <div id="preparar-out"></div>
     </div>
 
-    <div class="card">
+    ${
+      E.nube
+        ? `<div class="card"><div class="row"><h2 class="grow" style="margin:0">3. Conexión con internet</h2><span class="pill ok">● En la nube</span></div>
+            <p class="hint">El bot está en un servidor: responde las 24 horas y no necesita ngrok ni tu compu prendida.</p></div>`
+        : T
+          ? `<div class="card">
       <div class="row"><h2 class="grow" style="margin:0">3. Conexión con internet</h2>${
         E.tunel.url ? '<span class="pill ok">● Abierta</span>' : E.tunel.iniciando ? '<span class="pill warn">Abriendo…</span>' : '<span class="pill off">Cerrada</span>'
       }</div>
-      <p class="hint">ManyChat necesita una dirección en internet para pasarle los mensajes a esta compu. Usamos <b>ngrok</b> (gratis), que te da una dirección fija: la configurás una sola vez en ManyChat.</p>
+      <p class="hint">ManyChat necesita una dirección en internet para pasarle los mensajes a esta compu. Usamos <b>ngrok</b> (gratis), que te da una dirección fija: la configurás una sola vez en ManyChat. Es la misma para todas tus cuentas.</p>
       <ol class="steps">
         <li>Creá una cuenta gratis en <a href="https://dashboard.ngrok.com/signup" target="_blank" rel="noopener">ngrok.com</a>.</li>
         <li>Copiá tu <b>Authtoken</b> de <a href="https://dashboard.ngrok.com/get-started/your-authtoken" target="_blank" rel="noopener">esta página</a> y pegalo abajo.</li>
         <li>En <a href="https://dashboard.ngrok.com/domains" target="_blank" rel="noopener">Domains</a> reclamá tu dominio gratis (algo como <code>nombre.ngrok-free.app</code>) y pegalo abajo.</li>
         <li>Tocá <b>Abrir conexión</b>.</li>
       </ol>
-      <label>Authtoken de ngrok</label>${inputSecreto("ngrok-token", A.tunel.authtoken, "2abc…")}
-      <label>Tu dominio de ngrok</label><input type="text" id="ngrok-dominio" value="${esc(A.tunel.dominio)}" placeholder="tu-nombre.ngrok-free.app">
+      <label>Authtoken de ngrok</label>${inputSecreto("ngrok-token", T.authtoken, "2abc…")}
+      <label>Tu dominio de ngrok</label><input type="text" id="ngrok-dominio" value="${esc(T.dominio)}" placeholder="tu-nombre.ngrok-free.app">
       ${E.tunel.error ? `<div class="alert bad">${esc(E.tunel.error)}</div>` : ""}
       <div class="row" style="margin-top:12px"><button class="btn primary" id="guardar-tunel">Guardar</button>
         ${E.tunel.url ? '<button class="btn danger" id="cerrar-tunel">Cerrar conexión</button>' : '<button class="btn" id="abrir-tunel">Abrir conexión</button>'}</div>
-    </div>
+    </div>`
+          : `<div class="card"><h2>3. Conexión con internet</h2><p class="hint">${E.tunel.url ? "Abierta." : "La abre un administrador."}</p></div>`
+    }
 
     <div class="card">
       <h2>4. Conectar ManyChat con el bot</h2>
@@ -1009,10 +1319,48 @@ VISTAS.conexion = async () => {
         <li>No pongas mensajes después del External Request: el bot responde solo. Publicá el flow.</li>
         <li>Activá el bot desde <a href="#" data-ir="inicio">Inicio</a> y mandá un DM de prueba desde otra cuenta.</li>
       </ol>
-      <details><summary>¿Y si apago la compu?</summary>
-        <p>Mientras la compu esté apagada o la app cerrada, el bot no responde (los mensajes quedan sin contestar en ManyChat y los ves en Live Chat). Si querés que responda 24/7, el siguiente paso es subirlo a un servidor en la nube: funciona igual que acá.</p>
-      </details>
-    </div>`;
+      <p class="hint">Cada cuenta de Instagram tiene su propia dirección y su propia clave: si tenés varias, repetí estos pasos en el ManyChat de cada una (cambiando de cuenta arriba a la izquierda).</p>
+      ${
+        E.nube
+          ? ""
+          : `<details><summary>¿Y si apago la compu?</summary>
+        <p>Mientras la compu esté apagada o la app cerrada, el bot no responde (los mensajes quedan sin contestar en ManyChat y los ves en Live Chat). Para que responda 24/7, subilo a la nube: la guía está en el archivo LEEME/README ("Subirlo a la nube"). Con un respaldo (abajo) te llevás toda la configuración.</p>
+      </details>`
+      }
+    </div>
+
+    ${
+      puede("admin")
+        ? `<div class="card">
+      <h2>Respaldo de esta cuenta</h2>
+      <p class="hint">Descargá un archivo con toda la configuración, las conversaciones y las consultas de esta cuenta. Sirve para guardar una copia, pasar a una versión nueva o mudarte a la nube. <b>Incluye tus claves: guardalo en un lugar seguro.</b></p>
+      <div class="row"><button class="btn" id="descargar-respaldo">Descargar respaldo</button></div>
+      <h3>Restaurar un respaldo</h3>
+      <p class="hint">Reemplaza todo lo de esta cuenta por lo del archivo.</p>
+      <div class="row"><input type="file" id="archivo-respaldo" accept=".json,application/json"><button class="btn danger" id="restaurar">Restaurar</button></div>
+    </div>`
+        : ""
+    }`;
+
+  $("#descargar-respaldo")?.addEventListener("click", async () => {
+    const blob = await api("/api/respaldo", { blob: true });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `respaldo-setter-${cuentaActual}-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+  });
+  $("#restaurar")?.addEventListener("click", async () => {
+    const f = $("#archivo-respaldo").files[0];
+    if (!f) return toast("Elegí el archivo del respaldo");
+    if (!confirm("Esto reemplaza toda la configuración y las conversaciones de esta cuenta. ¿Seguir?")) return;
+    try {
+      const r = await api("/api/respaldo", { method: "POST", body: JSON.parse(await f.text()) });
+      toast(`Restaurado ✓ (${r.leads} conversaciones)`);
+      VISTAS.conexion();
+    } catch (e) {
+      toast(e.message.includes("JSON") ? "Ese archivo no es un respaldo válido" : e.message);
+    }
+  });
 
   $("#guardar-claude").addEventListener("click", async () => {
     await guardar((a) => {
@@ -1042,11 +1390,9 @@ VISTAS.conexion = async () => {
     }
     ev.target.disabled = false;
   });
-  $("#guardar-tunel").addEventListener("click", async () => {
-    await guardar((a) => {
-      a.tunel.authtoken = leerSecreto("ngrok-token", a.tunel.authtoken);
-      a.tunel.dominio = $("#ngrok-dominio").value.trim();
-    });
+  $("#guardar-tunel")?.addEventListener("click", async () => {
+    await api("/api/tunel", { method: "PUT", body: { authtoken: $("#ngrok-token").value.trim(), dominio: $("#ngrok-dominio").value.trim() } });
+    toast("Guardado ✓");
     VISTAS.conexion();
   });
   $("#abrir-tunel")?.addEventListener("click", async (ev) => {
@@ -1062,6 +1408,180 @@ VISTAS.conexion = async () => {
     await refrescarEstado();
     VISTAS.conexion();
   });
+};
+
+// ------------------------------------------------------------------ EQUIPO Y CUENTAS
+
+const ROLES_TXT = {
+  admin: ["Administrador", "Todo: configura, maneja el equipo, las cuentas y los respaldos."],
+  editor: ["Editor", "Configura el bot de sus cuentas (negocio, guion, automatizaciones…)."],
+  agente: ["Agente", "Solo responde consultas y mira conversaciones."],
+};
+
+VISTAS.equipo = async () => {
+  const [usuarios, cuentas] = await Promise.all([api("/api/equipo"), api("/api/cuentas")]);
+  const sinEquipo = usuarios.length === 0;
+  const nombreCuenta = (id) => cuentas.find((c) => c.id === id)?.nombre ?? id;
+  const checksCuentas = (pref, sel) =>
+    `<div class="dias"><label><input type="checkbox" data-${pref}="*" ${sel.includes("*") ? "checked" : ""}> Todas</label>${cuentas
+      .map((c) => `<label><input type="checkbox" data-${pref}="${esc(c.id)}" ${sel.includes(c.id) ? "checked" : ""}> ${esc(c.nombre)}</label>`)
+      .join("")}</div>`;
+  const leerCuentas = (pref, root = document) => {
+    const marcadas = [...root.querySelectorAll(`[data-${pref}]`)].filter((x) => x.checked).map((x) => x.getAttribute(`data-${pref}`));
+    return marcadas.includes("*") || marcadas.length === 0 ? ["*"] : marcadas;
+  };
+
+  main().innerHTML = `
+    <h1>Equipo y cuentas</h1>
+    <p class="sub">Manejá varias cuentas de Instagram desde el mismo panel y dale acceso a tu equipo con permisos distintos.</p>
+
+    <div class="card">
+      <h2>Cuentas de Instagram (${cuentas.length})</h2>
+      <p class="hint">Cada cuenta tiene su propio bot: su ManyChat, su información del negocio, su guion, sus conversaciones y su gasto. Las cambiás desde el selector de arriba a la izquierda.</p>
+      <div class="list">${cuentas
+        .map(
+          (c) => `<div class="item"><span>${c.botActivo ? "🟢" : "⚪"}</span>
+          <div class="grow"><div class="t">${esc(c.nombre)}</div><div class="d">${c.pagina ? `ManyChat: ${esc(c.pagina)}` : "Sin conectar a ManyChat"}</div></div>
+          <button class="btn small" data-renombrar="${esc(c.id)}">Renombrar</button>
+          ${cuentas.length > 1 ? `<button class="btn small danger" data-borrar-cuenta="${esc(c.id)}">Borrar</button>` : ""}</div>`,
+        )
+        .join("")}</div>
+      <div class="row" style="margin-top:12px"><input type="text" id="nueva-cuenta" class="grow" placeholder="Nombre de la cuenta nueva (ej. Clínica Sur)">
+        <button class="btn primary" id="crear-cuenta">+ Agregar cuenta</button></div>
+    </div>
+
+    <div class="card">
+      <h2>Equipo</h2>
+      ${
+        sinEquipo
+          ? `<div class="alert warn">Todavía no hay usuarios: cualquiera que abra el panel en esta compu entra directo. Creá tu usuario de administrador y desde ahí el panel va a pedir usuario y contraseña.</div>`
+          : `<div class="list">${usuarios
+              .map(
+                (u) => `<div class="item"><div class="grow"><div class="t">${esc(u.nombre)} <span class="hint">@${esc(u.usuario)}</span></div>
+                <div class="d">${ROLES_TXT[u.rol][0]} · ${u.cuentas.includes("*") ? "Todas las cuentas" : u.cuentas.map(nombreCuenta).map(esc).join(", ")}</div></div>
+                <button class="btn small" data-editar="${esc(u.usuario)}">Editar</button>
+                ${u.usuario !== SESION.usuario.usuario ? `<button class="btn small danger" data-borrar-usuario="${esc(u.usuario)}">Borrar</button>` : ""}</div>
+                <div class="card hidden" data-form="${esc(u.usuario)}" style="margin:0;border-radius:0">
+                  <label>Nombre</label><input type="text" data-f-nombre value="${esc(u.nombre)}">
+                  <label>Permisos</label><select data-f-rol>${Object.entries(ROLES_TXT).map(([k, [n]]) => `<option value="${k}" ${u.rol === k ? "selected" : ""}>${n}</option>`).join("")}</select>
+                  <label>Cuentas a las que accede</label>${checksCuentas("e-" + u.usuario.replace(/[^a-z0-9]/g, ""), u.cuentas)}
+                  <label>Contraseña nueva <span class="hint">(dejala vacía para no cambiarla)</span></label><input type="password" data-f-clave autocomplete="new-password">
+                  <div class="row" style="margin-top:10px"><button class="btn primary" data-guardar-usuario="${esc(u.usuario)}">Guardar</button></div>
+                </div>`,
+              )
+              .join("")}</div>`
+      }
+      <h3>${sinEquipo ? "Crear tu usuario de administrador" : "Agregar a alguien"}</h3>
+      <div class="grid">
+        <div><label>Usuario</label><input type="text" id="nu-usuario" placeholder="sofi" autocomplete="off"></div>
+        <div><label>Nombre</label><input type="text" id="nu-nombre" placeholder="Sofía"></div>
+        <div><label>Contraseña (mín. 8)</label><input type="password" id="nu-clave" autocomplete="new-password"></div>
+      </div>
+      ${
+        sinEquipo
+          ? ""
+          : `<label>Permisos</label>
+      ${Object.entries(ROLES_TXT)
+        .map(([k, [n, d]]) => `<label class="opcion" style="font-weight:400"><input type="radio" name="nu-rol" value="${k}" ${k === "agente" ? "checked" : ""}><span class="grow"><b>${n}</b><br><span class="hint">${d}</span></span></label>`)
+        .join("")}
+      <label>Cuentas a las que accede</label>${checksCuentas("nu-cuenta", ["*"])}`
+      }
+      <div class="row" style="margin-top:12px"><button class="btn primary" id="crear-usuario">${sinEquipo ? "Crear mi usuario" : "Agregar"}</button></div>
+    </div>`;
+
+  $("#crear-cuenta").addEventListener("click", async () => {
+    const nombre = $("#nueva-cuenta").value.trim();
+    if (!nombre) return toast("Poné un nombre");
+    try {
+      const r = await api("/api/cuentas", { method: "POST", body: { nombre } });
+      toast("Cuenta creada ✓");
+      SESION = await api("/api/sesion");
+      cuentaActual = r.cuenta.id;
+      pintarCuentas();
+      irA("conexion");
+    } catch (e) {
+      toast(e.message);
+    }
+  });
+  document.querySelectorAll("[data-renombrar]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      const nombre = prompt("Nuevo nombre de la cuenta:", nombreCuenta(b.dataset.renombrar));
+      if (!nombre) return;
+      await api(`/api/cuentas/${b.dataset.renombrar}`, { method: "PUT", body: { nombre } });
+      SESION = await api("/api/sesion");
+      pintarCuentas();
+      VISTAS.equipo();
+    }),
+  );
+  document.querySelectorAll("[data-borrar-cuenta]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      const id = b.dataset.borrarCuenta;
+      if (prompt(`Esto apaga el bot de "${nombreCuenta(id)}" y saca la cuenta del panel (los datos quedan guardados en la carpeta papelera). Escribí BORRAR para confirmar:`) !== "BORRAR") return;
+      try {
+        await api(`/api/cuentas/${id}`, { method: "DELETE" });
+        SESION = await api("/api/sesion");
+        if (cuentaActual === id) cuentaActual = SESION.cuentas[0]?.id;
+        pintarCuentas();
+        VISTAS.equipo();
+      } catch (e) {
+        toast(e.message);
+      }
+    }),
+  );
+  $("#crear-usuario").addEventListener("click", async () => {
+    try {
+      const r = await api("/api/equipo", {
+        method: "POST",
+        body: {
+          usuario: $("#nu-usuario").value,
+          nombre: $("#nu-nombre").value,
+          clave: $("#nu-clave").value,
+          rol: document.querySelector('input[name="nu-rol"]:checked')?.value ?? "admin",
+          cuentas: sinEquipo ? ["*"] : leerCuentas("nu-cuenta"),
+        },
+      });
+      toast(r.primero ? "Listo: desde ahora el panel pide usuario y contraseña" : "Usuario agregado ✓");
+      if (r.primero) return arrancar();
+      VISTAS.equipo();
+    } catch (e) {
+      toast(e.message);
+    }
+  });
+  document.querySelectorAll("[data-editar]").forEach((b) =>
+    b.addEventListener("click", () => document.querySelector(`[data-form="${b.dataset.editar}"]`).classList.toggle("hidden")),
+  );
+  document.querySelectorAll("[data-guardar-usuario]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      const u = b.dataset.guardarUsuario;
+      const form = document.querySelector(`[data-form="${u}"]`);
+      try {
+        await api(`/api/equipo/${encodeURIComponent(u)}`, {
+          method: "PUT",
+          body: {
+            nombre: form.querySelector("[data-f-nombre]").value,
+            rol: form.querySelector("[data-f-rol]").value,
+            cuentas: leerCuentas("e-" + u.replace(/[^a-z0-9]/g, ""), form),
+            clave: form.querySelector("[data-f-clave]").value,
+          },
+        });
+        toast("Guardado ✓");
+        VISTAS.equipo();
+      } catch (e) {
+        toast(e.message);
+      }
+    }),
+  );
+  document.querySelectorAll("[data-borrar-usuario]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      if (!confirm(`¿Sacar a @${b.dataset.borrarUsuario} del equipo?`)) return;
+      try {
+        await api(`/api/equipo/${encodeURIComponent(b.dataset.borrarUsuario)}`, { method: "DELETE" });
+        VISTAS.equipo();
+      } catch (e) {
+        toast(e.message);
+      }
+    }),
+  );
 };
 
 // ------------------------------------------------------------------ ANÁLISIS
@@ -1138,5 +1658,5 @@ VISTAS.analisis = async () => {
 
 // ------------------------------------------------------------------ arranque
 
-irA("inicio");
+arrancar().catch((e) => (main().innerHTML = `<div class="alert bad">${esc(e.message)}</div>`));
 setInterval(() => refrescarEstado().catch(() => {}), 8000);

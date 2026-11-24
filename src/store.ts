@@ -49,6 +49,8 @@ export interface Lead {
   hitos: { etapa: Etapa; at: string }[];
   booking?: { start?: string; uid?: string; link?: string; meetingUrl?: string };
   paused: boolean;
+  /** Si la pausa es temporal: cuándo vuelve a responder el bot solo. */
+  pausadoHasta?: string;
   lastUserAt?: string;
   lastBotAt?: string;
   followupsSent: number;

@@ -8,7 +8,8 @@ import path from "node:path";
  */
 export interface Consulta {
   id: string;
-  tipo: "consulta" | "derivacion";
+  /** consulta = no sabía algo · derivacion = pidió una persona · error = falló algo técnico */
+  tipo: "consulta" | "derivacion" | "error";
   leadId: string;
   nombre?: string;
   username?: string;

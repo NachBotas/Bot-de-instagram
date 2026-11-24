@@ -1,12 +1,13 @@
 import { exec } from "node:child_process";
 import { timingSafeEqual } from "node:crypto";
-import express, { type NextFunction, type Request, type Response } from "express";
+import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import { correrAnalisis } from "./analytics/run.js";
 import { log } from "./app.js";
 import { config } from "./config.js";
 import { parseInbound } from "./inbound.js";
 import { crearPanel } from "./panel.js";
-import { Runtime } from "./runtime.js";
+import { Plataforma } from "./plataforma.js";
+import type { Runtime } from "./runtime.js";
 import { registrarEtapa } from "./store.js";
 
 export function safeEqual(a: string, b: string): boolean {
@@ -15,68 +16,88 @@ export function safeEqual(a: string, b: string): boolean {
   return ab.length === bb.length && timingSafeEqual(ab, bb);
 }
 
-/** Acepta el secreto en el header X-Webhook-Secret o en ?secret= (ManyChat permite ambos). */
-function requireSecret(getSecret: () => string | undefined) {
-  return (req: Request, res: Response, next: NextFunction) => {
-    const secret = getSecret();
-    if (!secret) return next();
-    const given = req.header("x-webhook-secret") ?? (typeof req.query.secret === "string" ? req.query.secret : "");
-    if (given && safeEqual(given, secret)) return next();
-    res.status(401).json({ error: "no autorizado" });
-  };
+/** Acepta el secreto de la cuenta en el header X-Webhook-Secret o en ?secret= (ManyChat permite ambos). */
+function secretoValido(req: Request, rt: Runtime): boolean {
+  const secret = rt.ajustes.webhookSecret;
+  if (!secret) return true;
+  const given = req.header("x-webhook-secret") ?? (typeof req.query.secret === "string" ? req.query.secret : "");
+  return !!given && safeEqual(given, secret);
 }
 
-function requireAdmin(req: Request, res: Response, next: NextFunction) {
-  const token = config.ADMIN_TOKEN;
-  const auth = req.header("authorization")?.replace(/^Bearer\s+/i, "") ?? "";
-  if (token && auth && safeEqual(auth, token)) return next();
-  res.status(401).json({ error: "no autorizado" });
-}
+/** Rutas públicas: lo que llaman ManyChat y la agenda, y las notas de voz. Esto es lo que expone el túnel. */
+function rutasPublicas(app: Express, p: Plataforma) {
+  const cuentaDe = (req: Request) => (req.params.cuenta ? p.cuenta(String(req.params.cuenta)) : p.principal);
 
-/** Servidor público: lo que llama ManyChat (y la agenda). Esto es lo que expone el túnel. */
-function crearServidorWebhooks(rt: Runtime) {
-  const server = express();
-  server.use(express.json({ limit: "1mb" }));
-  const secret = requireSecret(() => rt.ajustes.webhookSecret);
+  app.get("/health", (_req, res) => {
+    res.json({ ok: true });
+  });
 
-  server.get("/health", (_req, res) => {
-    res.json({ ok: true, botActivo: rt.ajustes.botActivo });
+  /** Notas de voz que manda el bot (ManyChat las descarga de acá). */
+  app.get("/media/:archivo", (req, res) => {
+    const ruta = p.media.ruta(String(req.params.archivo));
+    if (!ruta) {
+      res.status(404).end();
+      return;
+    }
+    res.sendFile(ruta, { headers: { "Content-Type": "audio/mpeg", "Cache-Control": "public, max-age=86400" } }, (err) => {
+      if (err && !res.headersSent) res.status(404).end();
+    });
   });
 
   /**
    * Webhook que llama el "External Request" de ManyChat por cada mensaje del lead.
    * Respondemos al instante (ManyChat corta a los 10 s) y el bot contesta por la API.
    */
-  server.post("/webhook/manychat", secret, (req, res) => {
+  const manychat = (req: Request, res: Response) => {
+    const rt = cuentaDe(req);
+    if (!rt) {
+      res.status(404).json({ error: "cuenta desconocida" });
+      return;
+    }
+    if (!secretoValido(req, rt)) {
+      res.status(401).json({ error: "no autorizado" });
+      return;
+    }
     // Formato Dynamic Block v2 vacío: ManyChat no manda nada extra y sigue el flow.
     const vacio = { version: "v2", content: { type: "instagram", messages: [] } };
     if (!rt.ajustes.botActivo) {
-      log("⏸️  Mensaje recibido con el bot apagado: no respondo");
+      log(`⏸️  [${rt.id}] Mensaje recibido con el bot apagado: no respondo`);
       res.json(vacio);
       return;
     }
     const msg = parseInbound(req.body);
     if ("error" in msg) {
-      log(`⚠️  Webhook ignorado: ${msg.error}`, req.body);
+      log(`⚠️  [${rt.id}] Webhook ignorado: ${msg.error}`);
       res.status(400).json({ error: msg.error });
       return;
     }
-    log(`📩 ${msg.subscriberId} (${msg.username ?? msg.firstName ?? "?"}): ${msg.text ?? ""}${msg.mediaUrl ? " [adjunto]" : ""}`);
+    log(`📩 [${rt.id}] ${msg.username ?? msg.firstName ?? msg.subscriberId}: ${msg.text ?? ""}${msg.mediaUrl ? " [adjunto]" : ""}`);
     res.json(vacio);
-    rt.app.engine.receive(msg).catch((err) => log("❌ Error guardando el mensaje", err instanceof Error ? err.stack : err));
-  });
+    rt.app.engine.receive(msg).catch((err) => log("❌ Error guardando el mensaje", err instanceof Error ? err.message : err));
+  };
+  app.post("/webhook/manychat", manychat);
+  app.post("/webhook/manychat/:cuenta", manychat);
 
   /**
-   * Webhook de la agenda (modo link): Calendly "invitee.created" o Cal.com "BOOKING_CREATED".
+   * Webhook de la agenda: Calendly "invitee.created" o Cal.com "BOOKING_CREATED".
    * Marca al lead como agendado y, si está configurado, dispara el flow de confirmación.
    */
-  server.post("/webhook/agenda", secret, async (req, res) => {
+  const agenda = async (req: Request, res: Response) => {
+    const rt = cuentaDe(req);
+    if (!rt) {
+      res.status(404).json({ error: "cuenta desconocida" });
+      return;
+    }
+    if (!secretoValido(req, rt)) {
+      res.status(401).json({ error: "no autorizado" });
+      return;
+    }
     const b = req.body ?? {};
-    const p = b.payload ?? {};
+    const pl = b.payload ?? {};
     const subscriberId: string | undefined =
-      p.tracking?.utm_content ?? p.metadata?.subscriber_id ?? p.responses?.subscriber_id ?? b.subscriber_id;
-    const start: string | undefined = p.scheduled_event?.start_time ?? p.startTime ?? b.start;
-    const email: string | undefined = p.email ?? p.attendees?.[0]?.email ?? b.email;
+      pl.tracking?.utm_content ?? pl.metadata?.subscriber_id ?? pl.responses?.subscriber_id ?? b.subscriber_id;
+    const start: string | undefined = pl.scheduled_event?.start_time ?? pl.startTime ?? b.start;
+    const email: string | undefined = pl.email ?? pl.attendees?.[0]?.email ?? b.email;
     if (!subscriberId) {
       res.status(200).json({ ok: false, reason: "sin subscriber_id (¿el link no se generó con el bot?)" });
       return;
@@ -92,47 +113,51 @@ function crearServidorWebhooks(rt: Runtime) {
       res.status(200).json({ ok: false, reason: "lead desconocido" });
       return;
     }
-    const manychat = rt.app.manychat;
+    const mc = rt.app.manychat;
     try {
-      if (prev !== "nuevo" && prev !== "agendado") await manychat.removeTag(lead.subscriberId, `setter_${prev}`);
-      await manychat.addTag(lead.subscriberId, "setter_agendado");
-      if (start) await manychat.setCustomField(lead.subscriberId, "setter_llamada", start);
+      if (prev !== "nuevo" && prev !== "agendado") await mc.removeTag(lead.subscriberId, `setter_${prev}`);
+      await mc.addTag(lead.subscriberId, "setter_agendado");
+      if (start) await mc.setCustomField(lead.subscriberId, "setter_llamada", start);
       const flow = rt.config.FLOW_BOOKED_NS;
-      if (flow) await manychat.sendFlow(lead.subscriberId, flow);
+      if (flow) await mc.sendFlow(lead.subscriberId, flow);
     } catch (err) {
       log("⚠️  No pude actualizar ManyChat tras la reserva", err instanceof Error ? err.message : err);
     }
-    log(`📅 ${lead.subscriberId} agendó para ${start ?? "?"}`);
+    log(`📅 [${rt.id}] ${lead.username ?? lead.subscriberId} agendó para ${start ?? "?"}`);
     res.json({ ok: true });
-  });
+  };
+  app.post("/webhook/agenda", agenda);
+  app.post("/webhook/agenda/:cuenta", agenda);
 
-  // ---- API de administración remota (Authorization: Bearer ADMIN_TOKEN), para servidores en la nube ----
+  // ---- API remota de solo lectura (Authorization: Bearer ADMIN_TOKEN), para integraciones ----
   if (config.ADMIN_TOKEN) {
-    server.get("/admin/leads", requireAdmin, async (_req, res) => {
+    const requireAdmin = (req: Request, res: Response, next: NextFunction) => {
+      const auth = req.header("authorization")?.replace(/^Bearer\s+/i, "") ?? "";
+      if (auth && safeEqual(auth, config.ADMIN_TOKEN!)) return next();
+      res.status(401).json({ error: "no autorizado" });
+    };
+    app.get("/admin/:cuenta/leads", requireAdmin, async (req, res) => {
+      const rt = p.cuenta(String(req.params.cuenta));
+      if (!rt) return void res.status(404).json({ error: "cuenta desconocida" });
       const leads = await rt.app.store.list();
-      res.json(
-        leads
-          .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-          .map(({ history, pending, ...rest }) => ({ ...rest, mensajes: history.length, pendientes: pending.length })),
-      );
+      res.json(leads.map(({ history, pending, ...rest }) => ({ ...rest, mensajes: history.length, pendientes: pending.length })));
     });
-    server.get("/admin/analisis", requireAdmin, async (req, res) => {
+    app.get("/admin/:cuenta/analisis", requireAdmin, async (req, res) => {
+      const rt = p.cuenta(String(req.params.cuenta));
+      if (!rt) return void res.status(404).json({ error: "cuenta desconocida" });
       const dias = Number(req.query.dias);
-      const result = await correrAnalisis({
+      const r = await correrAnalisis({
         store: rt.app.store,
         client: rt.app.client,
         model: rt.ajustes.claude.modelo,
-        dataDir: config.DATA_DIR,
+        dataDir: rt.base.DATA_DIR,
         negocio: rt.ajustes.negocio,
         dias: dias > 0 ? dias : undefined,
         recomendaciones: req.query.ia !== "0",
       });
-      if (req.query.formato === "md") res.type("text/markdown").send(result.markdown);
-      else res.json(result);
+      res.type("text/markdown").send(r.markdown);
     });
   }
-
-  return server;
 }
 
 function abrirNavegador(url: string) {
@@ -141,13 +166,30 @@ function abrirNavegador(url: string) {
 }
 
 async function main() {
-  const rt = await Runtime.start(config);
+  const p = await Plataforma.start(config);
 
-  const esLocal = ["127.0.0.1", "localhost", "::1"].includes(config.PANEL_HOST);
-  if (!esLocal && !config.PANEL_PASSWORD) {
-    throw new Error("Si el panel se abre fuera de esta compu (PANEL_HOST) tenés que definir PANEL_PASSWORD.");
+  if (p.esNube) {
+    // Nube: todo en un solo puerto, con inicio de sesión obligatorio.
+    if (!(await p.usuarios.hayUsuarios())) {
+      throw new Error("En la nube tenés que definir PANEL_PASSWORD (la contraseña del usuario 'admin').");
+    }
+    const app = express();
+    app.set("trust proxy", true);
+    app.use(express.json({ limit: "2mb" }));
+    rutasPublicas(app, p);
+    app.use(crearPanel(p, { local: false }));
+    app.listen(config.PORT, () => {
+      log(`☁️  Setter en la nube escuchando en el puerto ${config.PORT}`);
+      log(`🖥️  Panel: ${p.urlBase() ?? "(tu dirección pública)"}`);
+    });
+    return;
   }
 
+  // En la compu: webhooks en un puerto (el que expone el túnel) y el panel en otro, solo para esta compu.
+  const esLocal = ["127.0.0.1", "localhost", "::1"].includes(config.PANEL_HOST);
+  if (!esLocal && !(await p.usuarios.hayUsuarios())) {
+    throw new Error("Si el panel se abre fuera de esta compu (PANEL_HOST) tenés que definir PANEL_PASSWORD.");
+  }
   const panelUrl = `http://${esLocal ? "localhost" : config.PANEL_HOST}:${config.PANEL_PORT}`;
 
   // Si la app ya estaba abierta (doble clic dos veces), abrimos ese panel en vez de fallar.
@@ -159,14 +201,19 @@ async function main() {
     setTimeout(() => process.exit(0), 1500);
   };
 
-  crearServidorWebhooks(rt)
+  const publico = express();
+  publico.use(express.json({ limit: "1mb" }));
+  rutasPublicas(publico, p);
+  publico
     .listen(config.PORT, () => log(`📡 Webhooks escuchando en el puerto ${config.PORT}`))
     .on("error", (e: NodeJS.ErrnoException) => yaAbierta(e, "de los webhooks"));
 
-  crearPanel(rt)
+  const panel = express();
+  panel.use(crearPanel(p, { local: esLocal }));
+  panel
     .listen(config.PANEL_PORT, config.PANEL_HOST, () => {
       log(`🖥️  Panel de control: ${panelUrl}`);
-      log(rt.ajustes.botActivo ? "▶️  El bot está ACTIVO" : "⏸️  El bot está apagado: activalo desde el panel");
+      for (const c of p.lista()) log(`${c.botActivo ? "▶️ " : "⏸️ "} ${c.nombre}: bot ${c.botActivo ? "ACTIVO" : "apagado"}`);
       if (process.argv.includes("--abrir")) abrirNavegador(panelUrl);
     })
     .on("error", (e: NodeJS.ErrnoException) => yaAbierta(e, "del panel"));

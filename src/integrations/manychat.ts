@@ -19,6 +19,8 @@ export interface ManyChatFolder {
 
 export interface ManyChatClient {
   sendText(subscriberId: string, messages: string[]): Promise<void>;
+  /** Manda una nota de voz (la URL tiene que ser pública). */
+  sendAudio(subscriberId: string, url: string): Promise<void>;
   sendFlow(subscriberId: string, flowNs: string): Promise<void>;
   addTag(subscriberId: string, tag: string): Promise<void>;
   removeTag(subscriberId: string, tag: string): Promise<void>;
@@ -77,6 +79,13 @@ export class ManyChatApi implements ManyChatClient {
           messages: messages.map((text) => ({ type: "text", text })),
         },
       },
+    });
+  }
+
+  async sendAudio(subscriberId: string, url: string): Promise<void> {
+    await this.call("POST", "/fb/sending/sendContent", {
+      subscriber_id: subscriberId,
+      data: { version: "v2", content: { type: "instagram", messages: [{ type: "audio", url }] } },
     });
   }
 
@@ -157,6 +166,9 @@ export class DryRunManyChat implements ManyChatClient {
   constructor(private readonly log: (line: string) => void = (l) => console.log(l)) {}
   async sendText(id: string, messages: string[]) {
     for (const m of messages) this.log(`[ManyChat → ${id}] 💬 ${m}`);
+  }
+  async sendAudio(id: string, url: string) {
+    this.log(`[ManyChat → ${id}] 🎙️ nota de voz ${url}`);
   }
   async sendFlow(id: string, flowNs: string) {
     this.log(`[ManyChat → ${id}] ▶️  dispara flow ${flowNs}`);

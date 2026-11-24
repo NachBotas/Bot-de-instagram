@@ -11,6 +11,9 @@ Un setter de ventas que atiende los DMs de Instagram por vos:
 - **Deriva a un humano** cuando hace falta y se pone en pausa.
 - **Escribe como persona**: junta los mensajes que el lead manda seguidos, responde en burbujas cortas y hace un seguimiento si deja de contestar.
 - **Detecta cuellos de botella**: te dice después de qué pregunta deja de responder la gente y te propone cómo reescribirla.
+- **Varias cuentas y equipo**: manejás varias cuentas de Instagram desde el mismo panel, con usuarios y permisos (administrador, editor, agente).
+- **Responde con audio** (opcional): notas de voz con tu voz clonada en ElevenLabs.
+- **24/7 en la nube**: el mismo panel, en un servidor, sin depender de tu compu.
 
 ```
 Instagram DM ──► ManyChat (Default Reply → External Request) ──► este servidor
@@ -39,6 +42,12 @@ Una app que corrés en tu compu y manejás con botones, sin tocar código:
 - **Probar el bot:** un chat para hablar con el bot sin mandar nada a Instagram.
 - **Conversaciones:** ves qué está hablando con cada lead y lo pausás para responder vos.
 - **Análisis:** te muestra en qué pregunta deja de responder la gente.
+- **Comportamiento:** horario de atención (fuera de horario los mensajes esperan), demora "humana" al azar, seguimientos, a quién no responderle (tags como `cliente`), qué hacer si algo falla y el **gasto real de Claude** del mes con un tope de aviso.
+- **Si algo falla** (Claude sin saldo, ManyChat caído): te avisa en Inicio y en Consultas con un botón **Reintentar**, y al lead le llega un "ya te respondo" para que no quede en visto.
+- **Audios:** además de entenderlos, puede **responder con notas de voz** (tu voz clonada en ElevenLabs).
+- **Agenda:** conectás Calendly (o Cal.com) para enterarte de quién agendó de verdad; las llamadas agendadas por semana y por mes aparecen en Inicio.
+- **Equipo y cuentas:** varias cuentas de Instagram (cada una con su ManyChat, su guion y sus conversaciones) y usuarios con permisos: **administrador** (todo), **editor** (configura sus cuentas) y **agente** (solo consultas y conversaciones).
+- **Respaldo:** descargás o restaurás toda la configuración y las conversaciones de una cuenta (sirve para mudarte a la nube).
 
 ### Cómo abrirla (zip listo, sin instalar nada)
 
@@ -50,7 +59,25 @@ Los zips se generan con `npm run empaquetar` (quedan en `dist-zip/`). Traen el b
 
 Desde el código fuente (con Node.js instalado): doble clic en `Iniciar Setter.bat` / `Iniciar Setter.command`, o `npm install` y `npm run app`.
 
-No cierres la ventana negra mientras quieras que el bot responda. El panel solo se puede abrir desde tu compu: a internet solo se expone la dirección que usa ManyChat (vía ngrok), y está protegida con una clave secreta.
+No cierres la ventana negra mientras quieras que el bot responda. El panel solo se puede abrir desde tu compu: a internet solo se expone la dirección que usa ManyChat (vía ngrok), y está protegida con una clave secreta. Tus datos quedan en la carpeta `Setter-datos` de tu usuario, así que al bajar una versión nueva no se pierde nada.
+
+Mientras no crees usuarios, cualquiera que abra el panel en tu compu entra directo. Cuando creás tu usuario en **Equipo y cuentas**, empieza a pedir usuario y contraseña.
+
+### ☁️ Subirlo a la nube (responde 24/7 aunque apagues la compu)
+
+Usamos **Railway** (unos USD 5 por mes; confirmá el precio en su web). Lo hacés una sola vez:
+
+1. Creá una cuenta en <https://railway.com> (podés entrar con GitHub).
+2. **New Project → Deploy from GitHub repo** y elegí este repositorio (y la rama donde está esta versión). Railway detecta el `Dockerfile` solo.
+3. En **Variables** agregá `PANEL_PASSWORD` con una contraseña larga: es la del usuario `admin` del panel.
+4. En **Settings → Volumes** agregá un volumen montado en `/app/data` (ahí se guardan las conversaciones; sin esto se borran en cada actualización).
+5. En **Settings → Networking → Generate Domain**: Railway te da una dirección tipo `https://tu-setter.up.railway.app`. Esa es tu panel.
+6. Abrí esa dirección, entrá con usuario `admin` y la contraseña del paso 3.
+7. **Llevate tu configuración:** en la app de tu compu, **Conexión → Descargar respaldo**; en la nube, **Conexión → Restaurar** (una vez por cuenta). Si no, cargá todo de nuevo desde el panel.
+8. **Cambiá la dirección en ManyChat:** en Conexión vas a ver la URL nueva del webhook (con el dominio de Railway). Pegala en el External Request de ManyChat en lugar de la de ngrok.
+9. **Apagá el bot en tu compu** (o cerrá la app) para que no respondan los dos.
+
+En la nube no hace falta ngrok, y podés abrir el panel desde cualquier lado, también desde el celular.
 
 > Si preferís configurar todo a mano con `.env` (por ejemplo, para un servidor en la nube), seguí la guía de abajo: los valores del `.env` se usan como punto de partida y después todo se edita desde el panel.
 
@@ -107,8 +134,8 @@ Los tags (`setter_calificado`, `setter_agendado`, `auto_testimonios`, etc.) se c
 1. **Automation → Default Reply** (Instagram) → configurá la frecuencia en **"Every time"**.
 2. En ese flow agregá una acción **External Request**:
    - **Request type**: `POST`
-   - **URL**: `https://TU-SERVIDOR/webhook/manychat`
-   - **Headers**: `X-Webhook-Secret` = el mismo valor que pusiste en `WEBHOOK_SECRET`
+   - **URL**: `https://TU-SERVIDOR/webhook/manychat/<id-de-la-cuenta>` (el panel te la da lista para copiar en **Conexión**)
+   - **Headers**: `X-Webhook-Secret` = la clave secreta de esa cuenta (también está en **Conexión**)
    - **Body**: activá **"Add Full Contact Data"** (manda el contacto completo, incluido el último mensaje).
      Si preferís armarlo a mano, usá el botón de variables para insertar el ID del contacto, nombre, usuario de Instagram y "Last Text Input":
      ```json
@@ -130,31 +157,25 @@ Mandale un DM a tu cuenta desde otra cuenta de Instagram. En los logs del servid
 
 **Opción B – Link (Calendly u otro):** poné tu link en `BOOKING_LINK`. El bot lo manda con nombre, email e ID del contacto precargados. Para que el bot se entere cuando agendan, configurá un webhook de Calendly (`invitee.created`) o Cal.com (`BOOKING_CREATED`) apuntando a:
 ```
-https://TU-SERVIDOR/webhook/agenda?secret=TU_WEBHOOK_SECRET
+https://TU-SERVIDOR/webhook/agenda/<id-de-la-cuenta>?secret=CLAVE_SECRETA_DE_LA_CUENTA
 ```
+(El panel, en **Agenda**, te da esta dirección lista y conecta Calendly con un botón.)
 Cuando entra la reserva, el contacto pasa a `setter_agendado` y, si configuraste `FLOW_BOOKED_NS`, se dispara tu flow de confirmación/recordatorios.
 
 ## 6. Publicarlo (deploy)
 
-Cualquier servicio que corra Node 20+ o Docker sirve. Ejemplo con **Railway**:
-1. New Project → Deploy from GitHub → elegí este repo.
-2. En *Variables* cargá todo lo de tu `.env`.
-3. Agregá un **Volume** montado en `/app/data` (ahí se guardan las conversaciones).
-4. Railway te da una URL pública: esa es `TU-SERVIDOR` para ManyChat.
+Ver **"Subirlo a la nube"** más arriba (Railway). Cualquier servicio que corra Docker o Node 20+ sirve: en la nube el panel y los webhooks van por el mismo puerto (`PORT`) y el inicio de sesión es obligatorio (`PANEL_PASSWORD` crea el usuario `admin`). En Railway y Render el modo nube se activa solo; en otros servicios poné `NUBE=true`. Si el servicio no informa su dirección, definí `PUBLIC_BASE_URL`.
 
 Sin Docker: build `npm ci && npm run build`, start `npm start`.
 
-## 7. Panel de administración
+## 7. API de solo lectura
 
-Con `ADMIN_TOKEN` definido (header `Authorization: Bearer <ADMIN_TOKEN>`):
+Con `ADMIN_TOKEN` definido (header `Authorization: Bearer <ADMIN_TOKEN>`), para conectar otras herramientas:
 
 | Método | Ruta | Qué hace |
 |---|---|---|
-| GET | `/admin/leads` | lista de leads con etapa y datos |
-| GET | `/admin/leads/:id` | un lead con toda la conversación |
-| POST | `/admin/leads/:id/pause` | pausa el bot para ese lead |
-| POST | `/admin/leads/:id/resume` | lo reactiva |
-| DELETE | `/admin/leads/:id` | borra la conversación (empieza de cero) |
+| GET | `/admin/<cuenta>/leads` | lista de leads con etapa y datos |
+| GET | `/admin/<cuenta>/analisis?dias=30` | informe de cuellos de botella (markdown) |
 
 ## 8. Cuellos de botella: ¿dónde deja de responder la gente?
 
@@ -185,7 +206,7 @@ El informe se imprime y se guarda en `data/reportes/`. Ejemplo:
 | Propuesta de llamada | 5        | 4            | 1               | 20%      |
 ```
 
-También está en el panel: `GET /admin/analisis?dias=30&formato=md`. Con `--sin-ia` (o `?ia=0`) solo muestra los números, sin pedir recomendaciones.
+También está en el panel, en la sección **Análisis**. Con `--sin-ia` (o `?ia=0`) solo muestra los números, sin pedir recomendaciones.
 
 Necesitás unas cuantas conversaciones para que los números digan algo: los tipos de mensaje con menos de 5 casos se marcan con ⚠️.
 
@@ -216,11 +237,15 @@ Estructura:
 config/negocio.md             ← info de tu negocio (editar)
 config/automatizaciones.json  ← flows de ManyChat que puede disparar (editar)
 panel/                        ← la interfaz del panel de control (HTML + JS)
-src/server.ts                 ← arranque: webhooks públicos + panel local
-src/panel.ts                  ← API que usan los botones del panel
-src/runtime.ts                ← ajustes en caliente, túnel ngrok, chat de prueba
-src/settings.ts               ← ajustes guardados en data/ajustes.json
-src/consultas.ts              ← bandeja de preguntas que el bot no supo responder
+src/server.ts                 ← arranque: webhooks públicos + panel (compu o nube)
+src/panel.ts                  ← API del panel: sesión, permisos, cuentas, equipo
+src/plataforma.ts             ← varias cuentas, túnel ngrok, dirección pública
+src/runtime.ts                ← una cuenta: ajustes en caliente, errores, gasto, voz, respaldo
+src/usuarios.ts               ← equipo, contraseñas y sesiones
+src/settings.ts               ← ajustes de cada cuenta (data/cuentas/<id>/ajustes.json)
+src/consultas.ts              ← bandeja: no supo responder, pidió una persona, errores
+src/gasto.ts                  ← contador de gasto real de Claude
+src/horario.ts                ← horario de atención
 src/engine.ts                 ← junta mensajes, procesa audios/imágenes, envía respuestas, seguimientos
 src/agent/setter.ts           ← loop con Claude
 src/agent/prompt.ts           ← personalidad y método de venta

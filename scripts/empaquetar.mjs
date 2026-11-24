@@ -123,8 +123,9 @@ IMPORTANTE
   - No cierres la ventana negra (la terminal) mientras quieras que el bot responda.
   - El bot responde solo mientras la compu esté prendida y sin suspenderse.
   - Para volver al panel: http://localhost:4000
-  - Tus ajustes y conversaciones se guardan en la carpeta "data".
-    Si bajás una versión nueva, copiá la carpeta "data" a la nueva carpeta para no perder nada.
+  - Tus ajustes y conversaciones se guardan en la carpeta "Setter-datos" de tu usuario
+    (no dentro de esta carpeta). Si bajás una versión nueva, la abrís y sigue todo como estaba.
+  - Para hacer una copia de seguridad o mudarte a la nube: panel → Conexión → Descargar respaldo.
 
 Después de abrirlo, seguí los "Primeros pasos" que aparecen en la pantalla de inicio del panel.
 `;
@@ -144,6 +145,9 @@ echo.\r
 echo  Abriendo el panel del setter...\r
 echo  NO cierres esta ventana mientras quieras que el bot responda.\r
 echo.\r
+rem Los datos van en la carpeta del usuario: al actualizar la app no se pierde nada.\r
+set "DATA_DIR=%USERPROFILE%\\Setter-datos"\r
+if exist "data\\" if not exist "%DATA_DIR%\\" xcopy /E /I /Q "data" "%DATA_DIR%" >nul\r
 "motor\\node.exe" "app\\setter.mjs" --abrir\r
 echo.\r
 echo  El setter se cerro.\r
@@ -160,6 +164,9 @@ echo
 echo "  Abriendo el panel del setter..."
 echo "  NO cierres esta ventana mientras quieras que el bot responda."
 echo
+# Los datos van en la carpeta del usuario: al actualizar la app no se pierde nada.
+export DATA_DIR="$HOME/Setter-datos"
+if [ -d data ] && [ ! -d "$DATA_DIR" ]; then cp -R data "$DATA_DIR"; fi
 ./motor/node app/setter.mjs --abrir
 echo
 echo "  El setter se cerró. Podés cerrar esta ventana."

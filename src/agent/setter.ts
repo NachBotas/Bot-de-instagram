@@ -28,6 +28,8 @@ export interface SetterOptions {
   toolDeps: ToolDeps;
   businessTimezone: string;
   log: (msg: string, extra?: unknown) => void;
+  /** Se llama con los tokens de cada respuesta de Claude (para el contador de gasto). */
+  onUsage?: (modelo: string, uso: Anthropic.Beta.BetaUsage) => void;
 }
 
 export interface SetterReply {
@@ -63,6 +65,11 @@ export class Setter {
     try {
       for (let i = 0; i < MAX_ITERATIONS; i++) {
         const response = await this.call(working);
+        try {
+          this.opts.onUsage?.(response.model, response.usage);
+        } catch {
+          /* el contador nunca frena la respuesta */
+        }
         working.push({ role: "assistant", content: response.content });
 
         if (response.stop_reason === "refusal") {

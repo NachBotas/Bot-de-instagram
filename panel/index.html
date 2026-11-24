@@ -45,7 +45,7 @@ h3 { font-size: 15px; margin: 18px 0 6px; }
 .stat span { color: var(--muted); font-size: 13px; }
 label { display: block; font-weight: 600; font-size: 14px; margin: 14px 0 5px; }
 .hint { color: var(--muted); font-size: 13px; font-weight: 400; margin-top: 3px; }
-input[type=text], input[type=password], input[type=number], input[type=url], select, textarea {
+input[type=text], input[type=password], input[type=number], input[type=url], input[type=time], select, textarea {
   width: 100%; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); font: inherit;
 }
 textarea { min-height: 120px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13.5px; }
@@ -112,35 +112,67 @@ pre.mono { padding: 10px 12px; white-space: pre-wrap; margin: 6px 0; }
 .md h1 { font-size: 19px; } .md h2 { font-size: 16px; margin-top: 22px; } .md h3 { font-size: 15px; }
 details summary { cursor: pointer; font-weight: 600; }
 details { margin: 8px 0; }
+.cuenta-box { padding: 0 8px 14px; }
+.cuenta-box select { padding: 7px 9px; font-weight: 600; }
+.yo { margin-top: 18px; padding: 12px 8px 0; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); }
+.yo b { color: var(--ink); display: block; }
+.yo button { display: inline; padding: 0; color: var(--accent); width: auto; font-size: 13px; }
+.yo button:hover { background: none; text-decoration: underline; }
+.login { position: fixed; inset: 0; display: grid; place-items: center; background: var(--bg); padding: 16px; }
+.login .card { width: 100%; max-width: 360px; }
+.dias { display: flex; gap: 6px; flex-wrap: wrap; }
+.dias label { margin: 0; font-weight: 500; display: inline-flex; gap: 4px; align-items: center; border: 1px solid var(--line); border-radius: 8px; padding: 4px 10px; cursor: pointer; }
+.dias label:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.barras { display: flex; align-items: flex-end; gap: 4px; height: 70px; margin-top: 10px; }
+.barras div { flex: 1; background: var(--accent); border-radius: 3px 3px 0 0; min-height: 2px; opacity: .8; }
 .toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--panel); padding: 10px 18px; border-radius: 8px; font-weight: 600; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 10; }
 .toast.show { opacity: 1; }
 .hidden { display: none !important; }
 @media (max-width: 760px) {
   .layout { grid-template-columns: 1fr; background: none; }
   nav { position: static; height: auto; display: flex; overflow-x: auto; gap: 4px; padding: 10px; border-right: 0; border-bottom: 1px solid var(--line); }
-  nav .brand { display: none; }
+  nav .brand, nav .yo { display: none; }
+  .cuenta-box { padding: 0 6px 0 0; min-width: 170px; }
+  .cuenta-box .hint { display: none; }
   nav button { width: auto; white-space: nowrap; }
   main { padding: 18px 16px 50px; }
 }
 </style>
 </head>
 <body>
-<div class="layout">
+<div class="layout" id="layout">
   <nav id="nav">
     <div class="brand"><span class="brand-dot"></span>Setter</div>
-    <button data-v="inicio" class="active">Inicio</button>
-    <button data-v="probar">Probar el bot</button>
-    <button data-v="negocio">Mi negocio</button>
-    <button data-v="guion">Guion</button>
-    <button data-v="automatizaciones">Automatizaciones</button>
-    <button data-v="consultas">Consultas <span id="badge-consultas" class="badge hidden"></span></button>
-    <button data-v="conversaciones">Conversaciones</button>
-    <button data-v="audios">Audios</button>
-    <button data-v="agenda">Agenda</button>
-    <button data-v="conexion">Conexión</button>
-    <button data-v="analisis">Análisis</button>
+    <div class="cuenta-box" id="cuenta-box">
+      <div class="hint" style="margin:0 0 4px">Cuenta de Instagram</div>
+      <select id="cuenta-select"></select>
+    </div>
+    <button data-v="inicio" data-rol="agente" class="active">Inicio</button>
+    <button data-v="probar" data-rol="editor">Probar el bot</button>
+    <button data-v="negocio" data-rol="editor">Mi negocio</button>
+    <button data-v="guion" data-rol="editor">Guion</button>
+    <button data-v="comportamiento" data-rol="editor">Comportamiento</button>
+    <button data-v="automatizaciones" data-rol="editor">Automatizaciones</button>
+    <button data-v="consultas" data-rol="agente">Consultas <span id="badge-consultas" class="badge hidden"></span></button>
+    <button data-v="conversaciones" data-rol="agente">Conversaciones</button>
+    <button data-v="audios" data-rol="editor">Audios</button>
+    <button data-v="agenda" data-rol="editor">Agenda</button>
+    <button data-v="conexion" data-rol="editor">Conexión</button>
+    <button data-v="analisis" data-rol="editor">Análisis</button>
+    <button data-v="equipo" data-rol="admin">Equipo y cuentas</button>
+    <div class="yo" id="yo"></div>
   </nav>
   <main id="main"></main>
+</div>
+<div id="login" class="login hidden">
+  <form class="card" id="login-form">
+    <div class="brand" style="padding:0 0 14px"><span class="brand-dot"></span>Setter</div>
+    <h2>Iniciá sesión</h2>
+    <label>Usuario</label><input type="text" id="login-usuario" autocomplete="username" required>
+    <label>Contraseña</label><input type="password" id="login-clave" autocomplete="current-password" required>
+    <div id="login-error" class="alert bad hidden"></div>
+    <button class="btn primary" type="submit" style="width:100%;margin-top:16px">Entrar</button>
+  </form>
 </div>
 <div id="toast" class="toast"></div>
 <script src="app.js"></script>

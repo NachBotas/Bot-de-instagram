@@ -5,6 +5,7 @@ import { Setter } from "./agent/setter.js";
 import { buildTools, type ToolDeps } from "./agent/tools.js";
 import { bookingMode, type AppConfig } from "./config.js";
 import { Engine, type EngineOptions } from "./engine.js";
+import type { Uso } from "./gasto.js";
 import { CalComClient } from "./integrations/calendar.js";
 import { DryRunManyChat, ManyChatApi, type ManyChatClient } from "./integrations/manychat.js";
 import { createTranscriber, type Transcriber } from "./integrations/transcription.js";
@@ -43,6 +44,12 @@ export interface BuildOverrides {
   /** Flow de ManyChat para avisarle al equipo. */
   flowAviso?: string;
   registrarAviso?: ToolDeps["registrarAviso"];
+  /** Tokens de cada respuesta de Claude (contador de gasto). */
+  onUsage?: (modelo: string, uso: Uso) => void;
+  /** Se llama cada vez que se transcribe un audio. */
+  onTranscripcion?: () => void;
+  /** Opciones extra del motor: horario, exclusiones, errores, voz… */
+  engineExtra?: Partial<EngineOptions>;
 }
 
 export async function buildApp(cfg: AppConfig, overrides: BuildOverrides = {}): Promise<App> {
@@ -94,6 +101,7 @@ export async function buildApp(cfg: AppConfig, overrides: BuildOverrides = {}): 
     toolDeps,
     businessTimezone: cfg.BUSINESS_TIMEZONE,
     log: logger,
+    onUsage: overrides.onUsage,
   });
 
   let transcriber: Transcriber;
@@ -110,6 +118,19 @@ export async function buildApp(cfg: AppConfig, overrides: BuildOverrides = {}): 
     transcriber = createTranscriber({ provider: "none", language: cfg.TRANSCRIPTION_LANGUAGE });
   }
 
+  if (overrides.onTranscripcion && transcriber.enabled) {
+    const base = transcriber;
+    const contar = overrides.onTranscripcion;
+    transcriber = {
+      enabled: true,
+      transcribe: async (audio, mime) => {
+        const t = await base.transcribe(audio, mime);
+        contar();
+        return t;
+      },
+    };
+  }
+
   const store = overrides.store ?? new FileLeadStore(cfg.DATA_DIR);
 
   const engineOptions: EngineOptions = {
@@ -124,6 +145,7 @@ export async function buildApp(cfg: AppConfig, overrides: BuildOverrides = {}): 
     followup: { enabled: cfg.FOLLOWUP_ENABLED, afterHours: cfg.FOLLOWUP_AFTER_HOURS, max: cfg.FOLLOWUP_MAX },
     log: logger,
     fetchImpl: overrides.fetchImpl,
+    ...overrides.engineExtra,
   };
 
   return { engine: new Engine(engineOptions), engineOptions, store, manychat, client, transcriber, mode, warnings };
