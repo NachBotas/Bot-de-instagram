@@ -148,14 +148,28 @@ async function main() {
     throw new Error("Si el panel se abre fuera de esta compu (PANEL_HOST) tenés que definir PANEL_PASSWORD.");
   }
 
-  crearServidorWebhooks(rt).listen(config.PORT, () => log(`📡 Webhooks escuchando en el puerto ${config.PORT}`));
-
   const panelUrl = `http://${esLocal ? "localhost" : config.PANEL_HOST}:${config.PANEL_PORT}`;
-  crearPanel(rt).listen(config.PANEL_PORT, config.PANEL_HOST, () => {
-    log(`🖥️  Panel de control: ${panelUrl}`);
-    log(rt.ajustes.botActivo ? "▶️  El bot está ACTIVO" : "⏸️  El bot está apagado: activalo desde el panel");
-    if (process.argv.includes("--abrir")) abrirNavegador(panelUrl);
-  });
+
+  // Si la app ya estaba abierta (doble clic dos veces), abrimos ese panel en vez de fallar.
+  const yaAbierta = (err: NodeJS.ErrnoException, que: string) => {
+    if (err.code !== "EADDRINUSE") throw err;
+    console.log(`\nEl setter ya está abierto en otra ventana (o algo más usa el puerto ${que}).`);
+    console.log(`Abriendo el panel: ${panelUrl}\n`);
+    abrirNavegador(panelUrl);
+    setTimeout(() => process.exit(0), 1500);
+  };
+
+  crearServidorWebhooks(rt)
+    .listen(config.PORT, () => log(`📡 Webhooks escuchando en el puerto ${config.PORT}`))
+    .on("error", (e: NodeJS.ErrnoException) => yaAbierta(e, "de los webhooks"));
+
+  crearPanel(rt)
+    .listen(config.PANEL_PORT, config.PANEL_HOST, () => {
+      log(`🖥️  Panel de control: ${panelUrl}`);
+      log(rt.ajustes.botActivo ? "▶️  El bot está ACTIVO" : "⏸️  El bot está apagado: activalo desde el panel");
+      if (process.argv.includes("--abrir")) abrirNavegador(panelUrl);
+    })
+    .on("error", (e: NodeJS.ErrnoException) => yaAbierta(e, "del panel"));
 }
 
 main().catch((err) => {

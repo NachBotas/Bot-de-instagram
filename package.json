@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "analisis": "tsx src/scripts/analisis.ts",
-    "app": "tsx src/server.ts --abrir"
+    "app": "tsx src/server.ts --abrir",
+    "empaquetar": "node scripts/empaquetar.mjs"
   },
   "repository": {
     "type": "git",
@@ -32,6 +33,7 @@
   "devDependencies": {
     "@types/express": "^5.0.6",
     "@types/node": "^26.6.6",
+    "esbuild": "^0.28.2",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vitest": "^5.1.1"

@@ -38,12 +38,15 @@ Una app que corrés en tu compu y manejás con botones, sin tocar código:
 - **Conversaciones:** ves qué está hablando con cada lead y lo pausás para responder vos.
 - **Análisis:** te muestra en qué pregunta deja de responder la gente.
 
-### Cómo abrirla
+### Cómo abrirla (zip listo, sin instalar nada)
 
-1. Instalá **Node.js** (versión LTS) desde <https://nodejs.org>.
-2. Descargá esta carpeta.
-3. Hacé doble clic en **`Iniciar Setter.bat`** (Windows) o **`Iniciar Setter.command`** (Mac). La primera vez tarda un par de minutos en instalarse.
-4. Se abre el panel en tu navegador (<http://localhost:4000>). Seguí los **Primeros pasos** de la pantalla de inicio.
+1. Bajá el zip de tu compu: `Setter-Windows.zip`, `Setter-Mac-Apple.zip` (Mac M1/M2/M3/M4) o `Setter-Mac-Intel.zip`.
+2. Descomprimilo y abrí **`Abrir Setter.bat`** (Windows) o **`Abrir Setter.command`** (Mac; la primera vez con clic derecho → Abrir). El `LEEME.txt` del zip lo explica paso a paso.
+3. Se abre el panel en tu navegador (<http://localhost:4000>). Seguí los **Primeros pasos** de la pantalla de inicio.
+
+Los zips se generan con `npm run empaquetar` (quedan en `dist-zip/`). Traen el bot compilado y el motor de Node.js oficial adentro.
+
+Desde el código fuente (con Node.js instalado): doble clic en `Iniciar Setter.bat` / `Iniciar Setter.command`, o `npm install` y `npm run app`.
 
 No cierres la ventana negra mientras quieras que el bot responda. El panel solo se puede abrir desde tu compu: a internet solo se expone la dirección que usa ManyChat (vía ngrok), y está protegida con una clave secreta.
 
