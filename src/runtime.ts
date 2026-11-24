@@ -216,15 +216,29 @@ export class Runtime {
     await app.engine.flush(id);
     const nuevas = salida.slice(desde);
     const nombreFlow = (ns: string) => this.ajustes.automatizaciones.find((a) => a.flow_ns === ns)?.nombre ?? ns;
+    // Acciones en lenguaje simple (las técnicas, como escribir campos o quitar tags, no se muestran).
+    const HERRAMIENTAS: Record<string, string> = {
+      actualizar_lead: "📝 Guardó datos del lead",
+      ver_horarios_disponibles: "📅 Consultó los horarios libres",
+      agendar_llamada: "📅 Agendó la llamada",
+      enviar_link_agenda: "📅 Generó el link de agenda",
+    };
+    const acciones: string[] = [];
+    for (const l of nuevas) {
+      if (l.includes("💬")) continue;
+      const tool = l.match(/^🔧 (\w+)/)?.[1];
+      if (tool) {
+        if (HERRAMIENTAS[tool]) acciones.push(HERRAMIENTAS[tool]);
+        continue;
+      }
+      const flow = l.match(/dispara flow (\S+)/)?.[1];
+      if (flow) acciones.push(`⚡ Disparó la automatización "${nombreFlow(flow)}"`);
+      else if (/\+tag (\S+)/.test(l)) acciones.push(`🏷️ Etiqueta: ${l.match(/\+tag (\S+)/)![1]}`);
+      else if (l.startsWith("🔔")) acciones.push(l.replace("(prueba) ", ""));
+    }
     return {
       mensajes: nuevas.filter((l) => l.includes("💬")).map((l) => l.replace(/^\[ManyChat → [^\]]+\] 💬 /, "")),
-      acciones: nuevas
-        .filter((l) => !l.includes("💬"))
-        .map((l) =>
-          l
-            .replace(/^\[ManyChat → [^\]]+\] /, "")
-            .replace(/dispara flow (\S+)/, (_, ns) => `dispara la automatización "${nombreFlow(ns)}"`),
-        ),
+      acciones,
     };
   }
 

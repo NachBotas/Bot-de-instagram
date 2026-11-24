@@ -614,7 +614,12 @@ async function verConversacion(id) {
     <div class="card"><div class="chat" style="max-height:none">${
       (l.turnos || [])
         // Visto desde tu cuenta: lo del bot a la derecha (como tus mensajes), lo del lead a la izquierda.
-        .map((t) => `<div class="msg ${t.de === "bot" ? "lead" : "bot"}" title="${esc(new Date(t.at).toLocaleString("es-AR"))}">${esc(t.texto)}</div>`)
+        .flatMap((t) =>
+          // El bot manda varias burbujas: se guardan separadas por una línea en blanco.
+          (t.de === "bot" ? t.texto.split(/\n\s*\n/) : [t.texto]).map(
+            (parte) => `<div class="msg ${t.de === "bot" ? "lead" : "bot"}" title="${esc(new Date(t.at).toLocaleString("es-AR"))}">${esc(parte)}</div>`,
+          ),
+        )
         .join("") || '<div class="empty">Sin mensajes.</div>'
     }</div></div>`;
   $("#pausa").addEventListener("click", async () => {
