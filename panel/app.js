@@ -112,6 +112,7 @@ VISTAS.inicio = async () => {
     ["Conectar Claude (el cerebro del bot)", c.claude && ch.claude?.ok !== false, "conexion"],
     ["Conectar ManyChat", c.manychat && ch.manychat?.ok !== false, "conexion"],
     ["Cargar la información de tu negocio", c.negocio, "negocio"],
+    ["Revisar las preguntas del guion", c.guion, "guion"],
     ["Elegir qué automatizaciones puede usar el bot (opcional)", c.automatizaciones > 0, "automatizaciones"],
     ["Activar la lectura de audios", c.audios, "audios"],
     ["Configurar la agenda de llamadas", c.agenda, "agenda"],
@@ -254,9 +255,9 @@ VISTAS.negocio = async () => {
     <h1>Mi negocio</h1>
     <p class="sub">Todo lo que el bot sabe sale de acá. Si algo no está, no lo inventa: te consulta a vos.</p>
     <div class="card">
-      <div class="row"><h2 class="grow" style="margin:0">Información e indicaciones</h2>
+      <div class="row"><h2 class="grow" style="margin:0">Tu prompt e información del negocio</h2>
         <button class="btn small" id="plantilla">Cargar plantilla</button></div>
-      <p class="hint">Qué vendés, para quién es, cuándo ofrecer la llamada, preguntas frecuentes, objeciones, tono… Escribilo como se lo explicarías a un setter nuevo.</p>
+      <p class="hint">Pegá acá tu prompt o escribí qué vendés, para quién es, preguntas frecuentes, objeciones, tono… como se lo explicarías a un setter nuevo. Las preguntas y las reglas de "si dice esto, hacé esto" van en <a href="#" data-ir="guion">Guion</a>.</p>
       <textarea class="big" id="negocio">${esc(A.negocio)}</textarea>
       <div class="row" style="margin-top:10px"><button class="btn primary" id="guardar-negocio">Guardar</button></div>
     </div>
@@ -291,6 +292,160 @@ VISTAS.negocio = async () => {
       a.seguimientos = { activo: $("#seg-activo").checked, horas: +$("#seg-horas").value, max: +$("#seg-max").value };
     }),
   );
+};
+
+// ------------------------------------------------------------------ GUION
+
+// Costo aproximado con guion (charlas de ~5 respuestas). Sin guion, más o menos el doble.
+const MODELOS = [
+  { id: "claude-haiku-5-5", nombre: "Haiku 5.5", desc: "El más barato. Alcanza de sobra para seguir un guion de preguntas y mandar la agenda.", costo: "≈ USD 3", recomendado: true },
+  { id: "claude-sonnet-5-5", nombre: "Sonnet 5.5", desc: "Equilibrado: más natural si la gente pregunta cosas fuera del guion.", costo: "≈ USD 55" },
+  { id: "claude-opus-5-5", nombre: "Opus 5.5", desc: "El más inteligente. Para una charla de venta libre, sin guion.", costo: "≈ USD 110" },
+];
+
+VISTAS.guion = async () => {
+  A = await api("/api/ajustes");
+  const g = A.guion;
+  const preguntas = [...g.preguntas];
+  main().innerHTML = `
+    <h1>Guion</h1>
+    <p class="sub">El bot hace estas preguntas en orden, de a una, y después manda la agenda. Simple y directo.</p>
+    ${A.agenda.modo !== "link" ? `<div class="alert warn">Para mandar el link al final del guion, cargá tu link en <a href="#" data-ir="agenda">Agenda</a>.</div>` : ""}
+    <div class="card toggle-big">
+      <div><b>${g.activo ? "Usando el guion" : "Guion apagado"}</b>
+        <div class="hint">${g.activo ? "El bot sigue tus preguntas y manda la agenda." : "El bot hace una charla de venta libre (más larga y más cara)."}</div></div>
+      <label class="switch"><input type="checkbox" id="guion-activo" ${g.activo ? "checked" : ""}><span class="slider"></span></label>
+    </div>
+    <div class="card">
+      <h2>Preguntas</h2>
+      <div id="preguntas"></div>
+      <button class="btn small" id="agregar-pregunta" style="margin-top:8px">+ Agregar pregunta</button>
+      <label class="row" style="font-weight:400;margin-top:16px"><input type="checkbox" id="exactos" ${g.textosExactos ? "checked" : ""}>
+        Usar las preguntas con estas palabras exactas <span class="hint">(si no, el bot las adapta un poco para que suenen naturales)</span></label>
+    </div>
+    <div class="card">
+      <h2>Reglas: "si el lead dice esto, hacé esto"</h2>
+      <p class="hint">Para los momentos en que el bot tiene que tomar una decisión. Tienen prioridad sobre las preguntas. El bot entiende la idea aunque el lead lo diga con otras palabras.</p>
+      <div id="reglas"></div>
+      <button class="btn small" id="agregar-regla" style="margin-top:8px">+ Agregar regla</button>
+      ${A.automatizaciones.length ? "" : `<p class="hint">Para que una regla dispare un flow de ManyChat, primero permitilo en <a href="#" data-ir="automatizaciones">Automatizaciones</a>.</p>`}
+    </div>
+    <div class="card">
+      <h2>Mensaje con la agenda</h2>
+      <p class="hint">Se manda después de la última pregunta. Escribí <code>{link}</code> donde va el link de la agenda y <code>{nombre}</code> para el nombre del lead.</p>
+      <textarea id="mensaje-agenda" style="min-height:80px;font-family:inherit;font-size:15px">${esc(g.mensajeAgenda)}</textarea>
+      <div class="row" style="margin-top:12px"><button class="btn primary" id="guardar-guion">Guardar</button>
+        <button class="btn" data-ir="probar">Probarlo en el chat</button></div>
+    </div>
+    <div class="card">
+      <h2>Así va a ser la charla</h2>
+      <div class="chat" id="vista-previa" style="min-height:0;max-height:none"></div>
+    </div>`;
+
+  const previa = () => {
+    const nombre = "Camila";
+    const link = A.agenda.link || "https://calendly.com/tu-link";
+    const burbujas = [["bot", "hola! vi tu reel"]];
+    preguntas.filter((p) => p.trim()).forEach((p) => {
+      burbujas.push(["lead", p]);
+      burbujas.push(["bot", "…"]);
+    });
+    burbujas.push(["lead", $("#mensaje-agenda").value.replace(/\{link\}/g, link).replace(/\{nombre\}/g, nombre)]);
+    // "bot" = el lead (izquierda) y "lead" = tu cuenta (derecha), como en Conversaciones.
+    $("#vista-previa").innerHTML = burbujas.map(([c, t]) => `<div class="msg ${c}">${esc(t)}</div>`).join("");
+  };
+
+  const pintar = () => {
+    $("#preguntas").innerHTML = preguntas
+      .map(
+        (p, i) => `<div class="row" style="margin-bottom:8px"><b style="width:22px">${i + 1}.</b>
+        <input type="text" class="grow" data-preg="${i}" value="${esc(p)}" placeholder="Escribí la pregunta">
+        <button class="btn small" data-subir="${i}" ${i === 0 ? "disabled" : ""} title="Subir">↑</button>
+        <button class="btn small danger" data-borrar="${i}" title="Borrar">✕</button></div>`,
+      )
+      .join("");
+    $$("[data-preg]").forEach((inp) =>
+      inp.addEventListener("input", () => {
+        preguntas[+inp.dataset.preg] = inp.value;
+        previa();
+      }),
+    );
+    $$("[data-borrar]").forEach((b) =>
+      b.addEventListener("click", () => {
+        preguntas.splice(+b.dataset.borrar, 1);
+        pintar();
+      }),
+    );
+    $$("[data-subir]").forEach((b) =>
+      b.addEventListener("click", () => {
+        const i = +b.dataset.subir;
+        [preguntas[i - 1], preguntas[i]] = [preguntas[i], preguntas[i - 1]];
+        pintar();
+      }),
+    );
+    previa();
+  };
+  pintar();
+
+  const reglas = structuredClone(A.reglas || []);
+  const pintarReglas = () => {
+    $("#reglas").innerHTML = reglas.length
+      ? reglas
+          .map(
+            (r, i) => `<div class="card" style="padding:12px 14px;margin-bottom:10px">
+          <div class="row"><b class="grow">Regla ${i + 1}</b><button class="btn small danger" data-borrar-regla="${i}">Quitar</button></div>
+          <label>Si el lead…</label>
+          <input type="text" data-cuando="${i}" value="${esc(r.cuando)}" placeholder="Ej: dice que no tiene plata / pregunta el precio / viene del reel de nutrición">
+          <label>Entonces el bot…</label>
+          <textarea data-hacer="${i}" style="min-height:60px;font-family:inherit;font-size:15px" placeholder="Ej: le dice que el precio se ve en la llamada y le pregunta si tiene 30 min esta semana">${esc(r.hacer)}</textarea>
+          <label>Y dispara la automatización (opcional)</label>
+          <select data-auto="${i}"><option value="">— Ninguna —</option>${A.automatizaciones
+            .map((a) => `<option value="${esc(a.clave)}" ${a.clave === r.automatizacion ? "selected" : ""}>${esc(a.nombre || a.clave)}</option>`)
+            .join("")}</select>
+        </div>`,
+          )
+          .join("")
+      : '<div class="empty">Sin reglas todavía.</div>';
+    $$("[data-cuando]").forEach((el) => el.addEventListener("input", () => (reglas[+el.dataset.cuando].cuando = el.value)));
+    $$("[data-hacer]").forEach((el) => el.addEventListener("input", () => (reglas[+el.dataset.hacer].hacer = el.value)));
+    $$("[data-auto]").forEach((el) => el.addEventListener("change", () => (reglas[+el.dataset.auto].automatizacion = el.value)));
+    $$("[data-borrar-regla]").forEach((b) =>
+      b.addEventListener("click", () => {
+        reglas.splice(+b.dataset.borrarRegla, 1);
+        pintarReglas();
+      }),
+    );
+  };
+  pintarReglas();
+  $("#agregar-regla").addEventListener("click", () => {
+    reglas.push({ cuando: "", hacer: "", automatizacion: "" });
+    pintarReglas();
+    $$("[data-cuando]").pop().focus();
+  });
+
+  $("#mensaje-agenda").addEventListener("input", previa);
+  $("#agregar-pregunta").addEventListener("click", () => {
+    preguntas.push("");
+    pintar();
+    $$("[data-preg]").pop().focus();
+  });
+  const guardarGuion = () =>
+    guardar((a) => {
+      a.guion = {
+        activo: $("#guion-activo").checked,
+        preguntas: preguntas.map((p) => p.trim()).filter(Boolean),
+        textosExactos: $("#exactos").checked,
+        mensajeAgenda: $("#mensaje-agenda").value.trim(),
+      };
+      a.reglas = reglas.filter((r) => r.cuando.trim() && (r.hacer.trim() || r.automatizacion));
+    }).then(() => VISTAS.guion());
+  $("#guardar-guion").addEventListener("click", () => {
+    if ($("#guion-activo").checked && !$("#mensaje-agenda").value.includes("{link}") && A.agenda.modo === "link") {
+      if (!confirm("El mensaje no tiene {link}: el bot no va a saber dónde poner el link de la agenda. ¿Guardar igual?")) return;
+    }
+    guardarGuion();
+  });
+  $("#guion-activo").addEventListener("change", guardarGuion);
 };
 
 // ------------------------------------------------------------------ AUTOMATIZACIONES
@@ -793,6 +948,14 @@ VISTAS.conexion = async () => {
         <li>Andá a <b>API Keys</b> → <b>Create Key</b>, copiala (empieza con <code>sk-ant-</code>) y pegala acá.</li>
       </ol>
       <label>API key de Claude</label>${inputSecreto("claude-key", A.claude.apiKey, "sk-ant-…")}
+      <label>Versión de Claude<div class="hint">Podés cambiarla cuando quieras. El costo es aproximado, con el guion activado (charlas cortas). Sin guion, las charlas son más largas y cuesta más o menos el doble.</div></label>
+      ${MODELOS.map(
+        (m) => `<label class="opcion ${A.claude.modelo === m.id ? "on" : ""}" style="font-weight:400">
+          <input type="radio" name="modelo" value="${m.id}" ${A.claude.modelo === m.id ? "checked" : ""}>
+          <span class="grow"><b>${esc(m.nombre)}</b>${m.recomendado ? ' <span class="pill ok">Recomendado con guion</span>' : ""}<br><span class="hint">${esc(m.desc)}</span></span>
+          <span class="costo"><b>${esc(m.costo)}</b><br><span class="hint">cada 1.000 conversaciones</span></span>
+        </label>`,
+      ).join("")}
       <label>Velocidad de respuesta</label>
       <select id="esfuerzo">
         <option value="low" ${A.claude.esfuerzo === "low" ? "selected" : ""}>Rápido (recomendado para chat)</option>
@@ -855,6 +1018,7 @@ VISTAS.conexion = async () => {
     await guardar((a) => {
       a.claude.apiKey = leerSecreto("claude-key", a.claude.apiKey);
       a.claude.esfuerzo = $("#esfuerzo").value;
+      a.claude.modelo = $('input[name="modelo"]:checked')?.value || a.claude.modelo;
     });
     const r = await api("/api/probar/claude", { method: "POST", body: {} });
     toast(r.ok ? "Claude conectado ✓" : r.detalle);

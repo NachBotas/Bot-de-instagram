@@ -1,18 +1,99 @@
 import type { BookingMode } from "../config.js";
 import type { Automation } from "./automations.js";
 
+/** Modo guion: preguntas fijas y después la agenda, sin más vueltas. */
+export interface Guion {
+  activo: boolean;
+  preguntas: string[];
+  /** true = usar las preguntas con esas mismas palabras; false = adaptarlas para que suenen naturales. */
+  textosExactos: boolean;
+  /** Mensaje que acompaña la agenda al final del guion. */
+  mensajeAgenda: string;
+}
+
+/** Regla "si el lead dice/hace X → hacé Y (y opcionalmente dispará una automatización)". */
+export interface Regla {
+  cuando: string;
+  hacer: string;
+  /** Clave de una automatización permitida, o vacío. */
+  automatizacion: string;
+}
+
 interface PromptInput {
   business: string;
   automations: Automation[];
   bookingMode: BookingMode;
   businessTimezone: string;
+  guion?: Guion;
+  reglas?: Regla[];
+}
+
+function seccionReglas(reglas: Regla[], automations: Automation[]): string {
+  const validas = reglas.filter((r) => r.cuando.trim() && (r.hacer.trim() || r.automatizacion));
+  if (validas.length === 0) return "";
+  const lineas = validas.map((r, i) => {
+    const auto = automations.find((a) => a.clave === r.automatizacion);
+    const pasos = [r.hacer.trim(), auto ? `Dispará la automatización "${auto.clave}" con disparar_automatizacion.` : ""].filter(Boolean);
+    return `${i + 1}. Si el lead ${r.cuando.trim().replace(/^si (el lead )?/i, "")}\n   → ${pasos.join(" ")}`;
+  });
+  return `
+<reglas_del_negocio>
+Reglas del dueño del negocio para situaciones puntuales. Tienen prioridad sobre el guion y el método: si lo que dice o hace el lead encaja con una condición (aunque lo diga con otras palabras), hacé lo que indica esa regla. Si no encaja con ninguna, seguí normalmente.
+${lineas.join("\n")}
+</reglas_del_negocio>
+`;
+}
+
+const METODO_LIBRE = `<metodo>
+Seguí este recorrido de forma natural, como una charla, no como un formulario. Una pregunta por vez.
+
+1. Conexión: respondé a lo que la persona dijo (si viene de un reel, una historia o una palabra clave, reconocelo). Mostrá interés genuino.
+2. Situación actual: a qué se dedica, dónde está hoy respecto a lo que resolvemos.
+3. Objetivo: qué quiere lograr y por qué le importa ahora.
+4. Obstáculo / dolor: qué le está impidiendo llegar, qué probó, qué le cuesta.
+5. Urgencia y compromiso: para cuándo lo quiere resolver; si está en un momento de invertir en ayuda.
+6. Puente: resumile en una frase lo que entendiste ("o sea, hoy estás en X, querés llegar a Y y lo que te frena es Z") y proponé la llamada como el siguiente paso lógico, explicando qué gana con ella.
+7. Agenda: cerrá día y horario.
+
+No hace falta completar todos los pasos si la persona ya te dio la información o te pide la llamada directamente: si ya está claro que califica, avanzá. Si alguien pregunta algo puntual, respondé primero y después retomá.
+Si en algún punto queda claro que no califica, no lo empujes a la llamada: sé amable, dale algo de valor y ofrecé el recurso gratuito si existe.
+</metodo>`;
+
+function metodoGuion(g: Guion, bookingMode: BookingMode): string {
+  const preguntas = g.preguntas.map((p) => p.trim()).filter(Boolean);
+  const cierre =
+    bookingMode === "link"
+      ? `llamá a enviar_link_agenda y mandá este mensaje, reemplazando {link} por el link que te devuelva${g.mensajeAgenda.includes("{nombre}") ? " y {nombre} por el nombre del lead" : ""}:
+"${g.mensajeAgenda.trim()}"`
+      : bookingMode === "calcom"
+        ? `proponé la llamada${g.mensajeAgenda.trim() ? ` con un mensaje en esta línea: "${g.mensajeAgenda.trim().replace(/\{link\}/g, "").trim()}"` : ""} y seguí los pasos de <agenda> para reservarla.`
+        : "decile que alguien del equipo le escribe para coordinar la llamada y usá derivar_a_humano con motivo \"coordinar llamada\".";
+  return `<guion>
+Seguí este guion, sin vueltas. Es corto a propósito: hacé las preguntas y mandá la agenda. No vendas, no insistas, no agregues preguntas que no estén acá.
+
+Preguntas, en este orden y de a una por mensaje:
+${preguntas.map((p, i) => `${i + 1}. ${p}`).join("\n")}
+
+${
+  g.textosExactos
+    ? "Usá estas preguntas con estas mismas palabras. Antes de cada una podés poner una frase muy corta reaccionando a lo que dijo el lead (ej. \"Buenísimo!\"), nada más."
+    : "Podés adaptar las palabras para que suene natural y reaccionar en una frase a lo que dijo el lead, pero sin cambiar lo que se pregunta."
+}
+Si el lead ya respondió una pregunta antes de que se la hagas, salteala. Si pregunta algo, respondé en una frase (o usá consultar_al_equipo si no lo sabés) y volvé al guion.
+Guardá cada respuesta con actualizar_lead.
+
+Cuando tengas las respuestas (o si el lead pide la llamada antes), ${cierre}
+Después de mandar la agenda, respondé breve si te escribe algo más; no reinicies el guion.
+Si de sus respuestas queda claro que no califica según <negocio>, no le mandes la agenda: sé amable y ofrecé el recurso gratuito si existe.
+</guion>`;
 }
 
 /**
  * Prompt de sistema del setter. Es estático (no lleva fecha ni datos del lead)
  * para que se cachee entre mensajes; lo variable va en cada mensaje del lead.
  */
-export function buildSystemPrompt({ business, automations, bookingMode, businessTimezone }: PromptInput): string {
+export function buildSystemPrompt({ business, automations, bookingMode, businessTimezone, guion, reglas = [] }: PromptInput): string {
+  const usarGuion = !!guion?.activo && guion.preguntas.some((p) => p.trim());
   const bookingSection =
     bookingMode === "calcom"
       ? `Para agendar usás la agenda real:
@@ -39,20 +120,8 @@ Si el lead vive en otra zona horaria, preguntale de dónde es y pasá su zona ho
 ${business.trim()}
 </negocio>
 
-<metodo>
-Seguí este recorrido de forma natural, como una charla, no como un formulario. Una pregunta por vez.
-
-1. Conexión: respondé a lo que la persona dijo (si viene de un reel, una historia o una palabra clave, reconocelo). Mostrá interés genuino.
-2. Situación actual: a qué se dedica, dónde está hoy respecto a lo que resolvemos.
-3. Objetivo: qué quiere lograr y por qué le importa ahora.
-4. Obstáculo / dolor: qué le está impidiendo llegar, qué probó, qué le cuesta.
-5. Urgencia y compromiso: para cuándo lo quiere resolver; si está en un momento de invertir en ayuda.
-6. Puente: resumile en una frase lo que entendiste ("o sea, hoy estás en X, querés llegar a Y y lo que te frena es Z") y proponé la llamada como el siguiente paso lógico, explicando qué gana con ella.
-7. Agenda: cerrá día y horario.
-
-No hace falta completar todos los pasos si la persona ya te dio la información o te pide la llamada directamente: si ya está claro que califica, avanzá. Si alguien pregunta algo puntual, respondé primero y después retomá.
-Si en algún punto queda claro que no califica, no lo empujes a la llamada: sé amable, dale algo de valor y ofrecé el recurso gratuito si existe.
-</metodo>
+${usarGuion ? metodoGuion(guion!, bookingMode) : METODO_LIBRE}
+${seccionReglas(reglas, automations)}
 
 <agenda>
 Zona horaria del negocio: ${businessTimezone}. La fecha y hora actuales vienen en el contexto de cada mensaje.

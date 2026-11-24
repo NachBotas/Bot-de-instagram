@@ -78,6 +78,10 @@ input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px s
 .switch.small { width: 42px; height: 24px; }
 .switch.small .slider::before { width: 18px; height: 18px; left: 3px; top: 3px; }
 .switch.small input:checked + .slider::before { transform: translateX(18px); }
+.opcion { display: flex; align-items: center; gap: 12px; border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; margin: 8px 0; cursor: pointer; }
+.opcion:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.opcion .grow { flex: 1; }
+.opcion .costo { text-align: right; white-space: nowrap; }
 .steps { counter-reset: s; list-style: none; padding: 0; margin: 0; }
 .steps li { counter-increment: s; position: relative; padding: 0 0 14px 38px; }
 .steps li::before { content: counter(s); position: absolute; left: 0; top: 0; width: 26px; height: 26px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-weight: 700; display: grid; place-items: center; font-size: 13px; }
@@ -127,6 +131,7 @@ details { margin: 8px 0; }
     <button data-v="inicio" class="active">Inicio</button>
     <button data-v="probar">Probar el bot</button>
     <button data-v="negocio">Mi negocio</button>
+    <button data-v="guion">Guion</button>
     <button data-v="automatizaciones">Automatizaciones</button>
     <button data-v="consultas">Consultas <span id="badge-consultas" class="badge hidden"></span></button>
     <button data-v="conversaciones">Conversaciones</button>

@@ -63,3 +63,51 @@ describe("consultas", () => {
     expect(items.find((x) => x.id === b.id)!.estado).toBe("pendiente");
   });
 });
+
+describe("guion", () => {
+  it("por defecto viene activo con 3 preguntas y el link en el mensaje", () => {
+    const g = AjustesSchema.parse({}).guion;
+    expect(g.activo).toBe(true);
+    expect(g.preguntas).toHaveLength(3);
+    expect(g.mensajeAgenda).toContain("{link}");
+  });
+
+  it("con guion activo, el prompt pide las preguntas en orden y mandar la agenda", async () => {
+    const { buildSystemPrompt } = await import("../src/agent/prompt.js");
+    const guion = { activo: true, preguntas: ["¿Edad?", "¿Rubro?"], textosExactos: true, mensajeAgenda: "Agendá acá: {link}" };
+    const p = buildSystemPrompt({ business: "x", automations: [], bookingMode: "link", businessTimezone: "UTC", guion });
+    expect(p).toContain("<guion>");
+    expect(p).not.toContain("<metodo>");
+    expect(p).toContain("1. ¿Edad?\n2. ¿Rubro?");
+    expect(p).toContain("enviar_link_agenda");
+    expect(p).toContain('"Agendá acá: {link}"');
+    expect(p).toContain("mismas palabras");
+    // Apagado: vuelve al método libre
+    const libre = buildSystemPrompt({ business: "x", automations: [], bookingMode: "link", businessTimezone: "UTC", guion: { ...guion, activo: false } });
+    expect(libre).toContain("<metodo>");
+  });
+});
+
+describe("reglas", () => {
+  it("se agregan al prompt con su automatización, y las vacías se ignoran", async () => {
+    const { buildSystemPrompt } = await import("../src/agent/prompt.js");
+    const automations = [{ clave: "testimonios", flow_ns: "c1", descripcion: "videos", cuando_usar: "dudas" }];
+    const p = buildSystemPrompt({
+      business: "x",
+      automations,
+      bookingMode: "link",
+      businessTimezone: "UTC",
+      reglas: [
+        { cuando: "dice que no tiene plata", hacer: "Ofrecele la guía gratis.", automatizacion: "" },
+        { cuando: "Si el lead duda de si funciona", hacer: "", automatizacion: "testimonios" },
+        { cuando: "", hacer: "esto no va", automatizacion: "" },
+        { cuando: "usa un flow borrado", hacer: "", automatizacion: "no_existe" },
+      ],
+    });
+    expect(p).toContain("<reglas_del_negocio>");
+    expect(p).toContain("1. Si el lead dice que no tiene plata\n   → Ofrecele la guía gratis.");
+    expect(p).toContain('2. Si el lead duda de si funciona\n   → Dispará la automatización "testimonios"');
+    expect(p).not.toContain("esto no va");
+    expect(buildSystemPrompt({ business: "x", automations, bookingMode: "link", businessTimezone: "UTC" })).not.toContain("<reglas_del_negocio>");
+  });
+});

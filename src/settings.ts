@@ -47,7 +47,23 @@ export const AjustesSchema = z.object({
     })
     .prefault({}),
   negocio: z.string().default(""),
+  guion: z
+    .object({
+      activo: z.boolean().default(true),
+      preguntas: z
+        .array(z.string())
+        .default(["¿A qué te dedicás hoy?", "¿Qué te gustaría lograr en los próximos meses?", "¿Qué es lo que más te está frenando para lograrlo?"]),
+      textosExactos: z.boolean().default(false),
+      mensajeAgenda: z
+        .string()
+        .default("Buenísimo {nombre}! Con lo que me contás creo que te podemos ayudar. Agendá una llamada gratuita acá y lo vemos en detalle: {link}"),
+    })
+    .prefault({}),
   automatizaciones: z.array(AutomatizacionSchema).default([]),
+  /** Reglas "si el lead dice X → hacé Y": tienen prioridad sobre el guion. */
+  reglas: z
+    .array(z.object({ cuando: z.string().default(""), hacer: z.string().default(""), automatizacion: z.string().default("") }))
+    .default([]),
   avisos: z
     .object({
       /** Flow de ManyChat que se dispara cuando el bot necesita ayuda (ponele una acción "Notify Admin"). */

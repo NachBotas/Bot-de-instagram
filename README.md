@@ -30,7 +30,9 @@ Instagram DM ◄── ManyChat API (sendContent / sendFlow / tags) ◄───
 Una app que corrés en tu compu y manejás con botones, sin tocar código:
 
 - **Interruptor para prender y apagar el bot.** Mientras la compu esté prendida y la app abierta, responde solo.
-- **Mi negocio:** cargás la información y las indicaciones que sigue el bot.
+- **Mi negocio:** pegás tu prompt y la información del negocio.
+- **Guion:** elegís las preguntas que hace el bot (en orden, de a una) y el mensaje con la agenda que manda al final. Además, reglas del tipo "si el lead dice esto → hacé esto (y dispará tal automatización)".
+- **Versión de Claude:** elegís entre Haiku (el más barato, alcanza para un guion), Sonnet u Opus, con el costo aproximado de cada uno.
 - **Automatizaciones:** la app lee tus flows de ManyChat. Navegás carpeta por carpeta y elegís cuáles puede usar el bot y cuándo.
 - **Consultas:** cuando el bot no sabe algo, no inventa. Te avisa (en el panel y, si querés, por ManyChat con "Notify Admin"), le dice al lead que lo consulta y sigue la charla. Vos respondés desde el panel y el bot aprende la respuesta para la próxima.
 - **Audios:** elegís el servicio de transcripción, con tutorial paso a paso, y lo probás subiendo una nota de voz.

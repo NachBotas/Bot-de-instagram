@@ -68,6 +68,8 @@ export class Runtime {
         descripcion: x.descripcion || x.nombre,
         cuando_usar: x.cuando_usar || "cuando sea útil para el lead",
       })),
+      guion: a.guion,
+      reglas: a.reglas,
       flowAviso: a.avisos.flowAviso || undefined,
       registrarAviso: async ({ tipo, lead, texto }) => {
         const ultimo = [...lead.turnos].reverse().find((t) => t.de === "lead");
@@ -201,6 +203,8 @@ export class Runtime {
             descripcion: x.descripcion || x.nombre,
             cuando_usar: x.cuando_usar || "cuando sea útil para el lead",
           })),
+          guion: this.ajustes.guion,
+          reglas: this.ajustes.reglas,
           flowAviso: this.ajustes.avisos.flowAviso || undefined,
           registrarAviso: async ({ tipo, texto: t }) => {
             salida.push(`🔔 (prueba) ${tipo === "consulta" ? "Consulta al equipo" : "Derivación"}: ${t}`);

@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { loadAutomations, loadBusiness, type Automation } from "./agent/automations.js";
-import { buildSystemPrompt } from "./agent/prompt.js";
+import { buildSystemPrompt, type Guion, type Regla } from "./agent/prompt.js";
 import { Setter } from "./agent/setter.js";
 import { buildTools, type ToolDeps } from "./agent/tools.js";
 import { bookingMode, type AppConfig } from "./config.js";
@@ -36,6 +36,10 @@ export interface BuildOverrides {
   /** Texto del negocio y automatizaciones (si no se pasan, se leen de config/). */
   business?: string;
   automations?: Automation[];
+  /** Guion fijo de preguntas (si está activo, reemplaza el método de venta libre). */
+  guion?: Guion;
+  /** Reglas "si el lead dice X → hacé Y". */
+  reglas?: Regla[];
   /** Flow de ManyChat para avisarle al equipo. */
   flowAviso?: string;
   registrarAviso?: ToolDeps["registrarAviso"];
@@ -85,7 +89,7 @@ export async function buildApp(cfg: AppConfig, overrides: BuildOverrides = {}): 
     client,
     model: cfg.CLAUDE_MODEL,
     effort: cfg.CLAUDE_EFFORT,
-    systemPrompt: buildSystemPrompt({ business, automations, bookingMode: mode, businessTimezone: cfg.BUSINESS_TIMEZONE }),
+    systemPrompt: buildSystemPrompt({ business, automations, bookingMode: mode, businessTimezone: cfg.BUSINESS_TIMEZONE, guion: overrides.guion, reglas: overrides.reglas }),
     tools: buildTools({ bookingMode: mode, automations }),
     toolDeps,
     businessTimezone: cfg.BUSINESS_TIMEZONE,

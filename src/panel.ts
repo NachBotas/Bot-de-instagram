@@ -88,6 +88,7 @@ export function crearPanel(rt: Runtime) {
           audios: a.audios.proveedor !== "none" && !!a.audios.claves[a.audios.proveedor as "groq" | "openai" | "deepgram"],
           agenda: a.agenda.modo !== "ninguna",
           automatizaciones: a.automatizaciones.length,
+          guion: a.guion.activo && a.guion.preguntas.some((p) => p.trim()),
           tunel: !!a.tunel.authtoken,
         },
         numeros: {
