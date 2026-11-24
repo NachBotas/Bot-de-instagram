@@ -19,6 +19,10 @@ export interface ToolDeps {
   pauseTag: string;
   flowBookedNs?: string;
   handoffWebhookUrl?: string;
+  /** Flow de ManyChat que se dispara para avisarle al equipo (con una acción "Notify Admin"). */
+  flowAviso?: string;
+  /** Guarda el aviso en la bandeja del panel. */
+  registrarAviso?: (aviso: { tipo: "consulta" | "derivacion"; lead: Lead; texto: string }) => Promise<void>;
   log: (msg: string, extra?: unknown) => void;
   fetchImpl?: typeof fetch;
 }
@@ -138,6 +142,21 @@ export function buildTools(deps: Pick<ToolDeps, "bookingMode" | "automations">):
       },
     });
   }
+
+  tools.push({
+    name: "consultar_al_equipo",
+    description:
+      "Avisa al equipo de una pregunta del lead que no podés responder con la información del negocio (un dato, un precio, un caso particular). El equipo recibe el aviso y responde; la conversación sigue con vos. Usala en lugar de inventar.",
+    strict: true,
+    input_schema: {
+      type: "object",
+      properties: {
+        pregunta: { type: "string", description: "La pregunta del lead, clara y con el contexto necesario para que el equipo la responda." },
+      },
+      required: ["pregunta"],
+      additionalProperties: false,
+    },
+  });
 
   tools.push({
     name: "derivar_a_humano",
@@ -320,34 +339,55 @@ export async function executeTool(name: string, input: unknown, lead: Lead, deps
       return { content: `Listo, se disparó "${auto.clave}". El lead ya lo recibe; no repitas el contenido.` };
     }
 
+    case "consultar_al_equipo": {
+      const pregunta = String(args.pregunta ?? "").trim();
+      if (!pregunta) return { content: "Falta la pregunta.", isError: true };
+      await avisarEquipo(deps, lead, "consulta", pregunta);
+      await safe(deps, "tag de consulta", () => deps.manychat.addTag(id, "setter_consulta"));
+      return {
+        content:
+          "Avisado. Decile al lead que lo consultás con el equipo y le confirmás apenas tengas la respuesta, sin inventar nada. Si tiene sentido, seguí la conversación con la siguiente pregunta.",
+      };
+    }
+
     case "derivar_a_humano": {
       const motivo = String(args.motivo ?? "sin motivo");
       lead.paused = true;
       lead.perfil["motivo_derivacion"] = motivo.slice(0, 300);
       await setEtapa(lead, "humano", deps);
       await safe(deps, "tag de pausa", () => deps.manychat.addTag(id, deps.pauseTag));
-      if (deps.handoffWebhookUrl) {
-        const f = deps.fetchImpl ?? fetch;
-        await safe(deps, "webhook de derivación", async () => {
-          const res = await f(deps.handoffWebhookUrl!, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              subscriber_id: id,
-              nombre: lead.firstName,
-              username: lead.username,
-              motivo,
-              perfil: lead.perfil,
-              etapa: lead.etapa,
-            }),
-          });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        });
-      }
+      await avisarEquipo(deps, lead, "derivacion", motivo);
       return { content: "Derivado. El bot queda en pausa para este lead. Despedite en una frase diciendo que alguien del equipo le responde." };
     }
 
     default:
       return { content: `Herramienta desconocida: ${name}`, isError: true };
+  }
+}
+
+/** Avisa al equipo por todos los canales configurados: bandeja del panel, flow de ManyChat y webhook. */
+async function avisarEquipo(deps: ToolDeps, lead: Lead, tipo: "consulta" | "derivacion", texto: string): Promise<void> {
+  const id = lead.subscriberId;
+  if (deps.registrarAviso) await safe(deps, "bandeja de avisos", () => deps.registrarAviso!({ tipo, lead, texto }));
+  if (deps.flowAviso) await safe(deps, "flow de aviso", () => deps.manychat.sendFlow(id, deps.flowAviso!));
+  if (deps.handoffWebhookUrl) {
+    const f = deps.fetchImpl ?? fetch;
+    await safe(deps, "webhook de aviso", async () => {
+      const res = await f(deps.handoffWebhookUrl!, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tipo,
+          subscriber_id: id,
+          nombre: lead.firstName,
+          username: lead.username,
+          texto,
+          motivo: texto,
+          perfil: lead.perfil,
+          etapa: lead.etapa,
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    });
   }
 }

@@ -82,7 +82,7 @@ describe("herramientas", () => {
 
   it("expone las herramientas según la configuración", () => {
     const names = buildTools(deps).map((t) => t.name);
-    expect(names).toEqual(["actualizar_lead", "enviar_link_agenda", "disparar_automatizacion", "derivar_a_humano"]);
+    expect(names).toEqual(["actualizar_lead", "enviar_link_agenda", "disparar_automatizacion", "consultar_al_equipo", "derivar_a_humano"]);
     expect(buildTools({ bookingMode: "calcom", automations: [] }).map((t) => t.name)).toContain("agendar_llamada");
   });
 
@@ -110,6 +110,21 @@ describe("herramientas", () => {
     const r = await executeTool("disparar_automatizacion", { clave: "recurso_gratis", motivo: "no califica" }, lead, deps);
     expect(r.isError).toBeUndefined();
     expect(logs.some((l) => l.includes("dispara flow content123"))).toBe(true);
+  });
+
+  it("consultar_al_equipo avisa sin pausar el bot", async () => {
+    const avisos: string[] = [];
+    const lead = newLead("11");
+    const r = await executeTool(
+      "consultar_al_equipo",
+      { pregunta: "¿Aceptan pagos en cuotas?" },
+      lead,
+      { ...deps, flowAviso: "content_aviso", registrarAviso: async (a) => void avisos.push(`${a.tipo}:${a.texto}`) },
+    );
+    expect(r.isError).toBeUndefined();
+    expect(avisos).toEqual(["consulta:¿Aceptan pagos en cuotas?"]);
+    expect(lead.paused).toBe(false);
+    expect(logs.some((l) => l.includes("dispara flow content_aviso"))).toBe(true);
   });
 
   it("derivar_a_humano pausa el bot", async () => {

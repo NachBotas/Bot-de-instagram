@@ -39,8 +39,13 @@ export class Engine {
   private readonly locks = new Map<string, Promise<void>>();
   private readonly sleep: (ms: number) => Promise<void>;
 
-  constructor(private readonly o: EngineOptions) {
+  constructor(private o: EngineOptions) {
     this.sleep = o.sleep ?? defaultSleep;
+  }
+
+  /** Cambia la configuración en caliente (desde el panel) sin perder las conversaciones en curso. */
+  reconfigure(o: EngineOptions): void {
+    this.o = o;
   }
 
   /** Recibe un mensaje del webhook. Responde rápido; el procesamiento sigue en segundo plano. */

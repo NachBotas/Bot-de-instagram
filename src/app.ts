@@ -1,13 +1,13 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { loadAutomations, loadBusiness } from "./agent/automations.js";
+import { loadAutomations, loadBusiness, type Automation } from "./agent/automations.js";
 import { buildSystemPrompt } from "./agent/prompt.js";
 import { Setter } from "./agent/setter.js";
 import { buildTools, type ToolDeps } from "./agent/tools.js";
 import { bookingMode, type AppConfig } from "./config.js";
-import { Engine } from "./engine.js";
+import { Engine, type EngineOptions } from "./engine.js";
 import { CalComClient } from "./integrations/calendar.js";
 import { DryRunManyChat, ManyChatApi, type ManyChatClient } from "./integrations/manychat.js";
-import { createTranscriber } from "./integrations/transcription.js";
+import { createTranscriber, type Transcriber } from "./integrations/transcription.js";
 import { FileLeadStore, type LeadStore } from "./store.js";
 
 export function log(msg: string, extra?: unknown): void {
@@ -18,21 +18,37 @@ export function log(msg: string, extra?: unknown): void {
 
 export interface App {
   engine: Engine;
+  engineOptions: EngineOptions;
   store: LeadStore;
   manychat: ManyChatClient;
+  client: Anthropic;
+  transcriber: Transcriber;
   mode: ReturnType<typeof bookingMode>;
+  /** Problemas de configuración que no impiden arrancar (se muestran en el panel). */
+  warnings: string[];
 }
 
-export async function buildApp(
-  cfg: AppConfig,
-  overrides: { store?: LeadStore; manychat?: ManyChatClient; logger?: typeof log; fetchImpl?: typeof fetch } = {},
-): Promise<App> {
+export interface BuildOverrides {
+  store?: LeadStore;
+  manychat?: ManyChatClient;
+  logger?: typeof log;
+  fetchImpl?: typeof fetch;
+  /** Texto del negocio y automatizaciones (si no se pasan, se leen de config/). */
+  business?: string;
+  automations?: Automation[];
+  /** Flow de ManyChat para avisarle al equipo. */
+  flowAviso?: string;
+  registrarAviso?: ToolDeps["registrarAviso"];
+}
+
+export async function buildApp(cfg: AppConfig, overrides: BuildOverrides = {}): Promise<App> {
   const logger = overrides.logger ?? log;
+  const warnings: string[] = [];
 
   let manychat = overrides.manychat;
   if (!manychat) {
     if (cfg.MANYCHAT_DRY_RUN || !cfg.MANYCHAT_API_KEY) {
-      if (!cfg.MANYCHAT_DRY_RUN) logger("⚠️  Falta MANYCHAT_API_KEY: los mensajes se imprimen en consola en vez de enviarse");
+      if (!cfg.MANYCHAT_DRY_RUN) warnings.push("Falta conectar ManyChat: las respuestas no se van a enviar.");
       manychat = new DryRunManyChat((l) => logger(l));
     } else {
       manychat = new ManyChatApi(cfg.MANYCHAT_API_KEY);
@@ -40,10 +56,11 @@ export async function buildApp(
   }
 
   const mode = bookingMode(cfg);
-  const calendar =
-    mode === "calcom" ? new CalComClient(cfg.CAL_API_KEY!, Number(cfg.CAL_EVENT_TYPE_ID), fetch) : undefined;
+  const calendar = mode === "calcom" ? new CalComClient(cfg.CAL_API_KEY!, Number(cfg.CAL_EVENT_TYPE_ID), fetch) : undefined;
 
-  const [business, automations] = await Promise.all([loadBusiness(cfg.BUSINESS_FILE), loadAutomations(cfg.AUTOMATIONS_FILE)]);
+  const business = overrides.business ?? (await loadBusiness(cfg.BUSINESS_FILE));
+  const automations = overrides.automations ?? (await loadAutomations(cfg.AUTOMATIONS_FILE));
+  if (!business.trim()) warnings.push("Todavía no cargaste la información de tu negocio.");
 
   const toolDeps: ToolDeps = {
     manychat,
@@ -55,12 +72,17 @@ export async function buildApp(
     pauseTag: cfg.PAUSE_TAG,
     flowBookedNs: cfg.FLOW_BOOKED_NS,
     handoffWebhookUrl: cfg.HANDOFF_WEBHOOK_URL,
+    flowAviso: overrides.flowAviso,
+    registrarAviso: overrides.registrarAviso,
     log: logger,
   };
 
+  // Sin API key explícita, el SDK la toma del entorno (ANTHROPIC_API_KEY u otra credencial configurada).
+  const client = new Anthropic(cfg.ANTHROPIC_API_KEY ? { apiKey: cfg.ANTHROPIC_API_KEY } : {});
+  if (!cfg.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_API_KEY) warnings.push("Falta la API key de Claude: el bot no puede responder.");
+
   const setter = new Setter({
-    // Sin argumentos: toma ANTHROPIC_API_KEY (u otra credencial configurada) del entorno.
-    client: new Anthropic(),
+    client,
     model: cfg.CLAUDE_MODEL,
     effort: cfg.CLAUDE_EFFORT,
     systemPrompt: buildSystemPrompt({ business, automations, bookingMode: mode, businessTimezone: cfg.BUSINESS_TIMEZONE }),
@@ -70,17 +92,23 @@ export async function buildApp(
     log: logger,
   });
 
-  const transcriber = createTranscriber({
-    provider: cfg.TRANSCRIPTION_PROVIDER,
-    language: cfg.TRANSCRIPTION_LANGUAGE,
-    openaiKey: cfg.OPENAI_API_KEY,
-    groqKey: cfg.GROQ_API_KEY,
-    deepgramKey: cfg.DEEPGRAM_API_KEY,
-  });
+  let transcriber: Transcriber;
+  try {
+    transcriber = createTranscriber({
+      provider: cfg.TRANSCRIPTION_PROVIDER,
+      language: cfg.TRANSCRIPTION_LANGUAGE,
+      openaiKey: cfg.OPENAI_API_KEY,
+      groqKey: cfg.GROQ_API_KEY,
+      deepgramKey: cfg.DEEPGRAM_API_KEY,
+    });
+  } catch (err) {
+    warnings.push(`Audios desactivados: ${(err as Error).message}`);
+    transcriber = createTranscriber({ provider: "none", language: cfg.TRANSCRIPTION_LANGUAGE });
+  }
 
   const store = overrides.store ?? new FileLeadStore(cfg.DATA_DIR);
 
-  const engine = new Engine({
+  const engineOptions: EngineOptions = {
     store,
     setter,
     manychat,
@@ -92,7 +120,7 @@ export async function buildApp(
     followup: { enabled: cfg.FOLLOWUP_ENABLED, afterHours: cfg.FOLLOWUP_AFTER_HOURS, max: cfg.FOLLOWUP_MAX },
     log: logger,
     fetchImpl: overrides.fetchImpl,
-  });
+  };
 
-  return { engine, store, manychat, mode };
+  return { engine: new Engine(engineOptions), engineOptions, store, manychat, client, transcriber, mode, warnings };
 }

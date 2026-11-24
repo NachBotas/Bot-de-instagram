@@ -25,6 +25,32 @@ Instagram DM ◄── ManyChat API (sendContent / sendFlow / tags) ◄───
 
 ---
 
+## ⚡ La forma fácil: la app con panel de control
+
+Una app que corrés en tu compu y manejás con botones, sin tocar código:
+
+- **Interruptor para prender y apagar el bot.** Mientras la compu esté prendida y la app abierta, responde solo.
+- **Mi negocio:** cargás la información y las indicaciones que sigue el bot.
+- **Automatizaciones:** la app lee tus flows de ManyChat. Navegás carpeta por carpeta y elegís cuáles puede usar el bot y cuándo.
+- **Consultas:** cuando el bot no sabe algo, no inventa. Te avisa (en el panel y, si querés, por ManyChat con "Notify Admin"), le dice al lead que lo consulta y sigue la charla. Vos respondés desde el panel y el bot aprende la respuesta para la próxima.
+- **Audios:** elegís el servicio de transcripción, con tutorial paso a paso, y lo probás subiendo una nota de voz.
+- **Probar el bot:** un chat para hablar con el bot sin mandar nada a Instagram.
+- **Conversaciones:** ves qué está hablando con cada lead y lo pausás para responder vos.
+- **Análisis:** te muestra en qué pregunta deja de responder la gente.
+
+### Cómo abrirla
+
+1. Instalá **Node.js** (versión LTS) desde <https://nodejs.org>.
+2. Descargá esta carpeta.
+3. Hacé doble clic en **`Iniciar Setter.bat`** (Windows) o **`Iniciar Setter.command`** (Mac). La primera vez tarda un par de minutos en instalarse.
+4. Se abre el panel en tu navegador (<http://localhost:4000>). Seguí los **Primeros pasos** de la pantalla de inicio.
+
+No cierres la ventana negra mientras quieras que el bot responda. El panel solo se puede abrir desde tu compu: a internet solo se expone la dirección que usa ManyChat (vía ngrok), y está protegida con una clave secreta.
+
+> Si preferís configurar todo a mano con `.env` (por ejemplo, para un servidor en la nube), seguí la guía de abajo: los valores del `.env` se usan como punto de partida y después todo se edita desde el panel.
+
+---
+
 ## 1. Requisitos
 
 - **ManyChat Pro** con tu Instagram conectado (la API y el "External Request" son de Pro).
@@ -184,7 +210,12 @@ Estructura:
 ```
 config/negocio.md             ← info de tu negocio (editar)
 config/automatizaciones.json  ← flows de ManyChat que puede disparar (editar)
-src/server.ts                 ← webhooks y panel admin
+panel/                        ← la interfaz del panel de control (HTML + JS)
+src/server.ts                 ← arranque: webhooks públicos + panel local
+src/panel.ts                  ← API que usan los botones del panel
+src/runtime.ts                ← ajustes en caliente, túnel ngrok, chat de prueba
+src/settings.ts               ← ajustes guardados en data/ajustes.json
+src/consultas.ts              ← bandeja de preguntas que el bot no supo responder
 src/engine.ts                 ← junta mensajes, procesa audios/imágenes, envía respuestas, seguimientos
 src/agent/setter.ts           ← loop con Claude
 src/agent/prompt.ts           ← personalidad y método de venta

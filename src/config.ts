@@ -23,6 +23,11 @@ const EnvSchema = z.object({
   PORT: num(3000),
   PUBLIC_BASE_URL: optStr,
 
+  // Panel de control (por defecto solo accesible desde esta compu)
+  PANEL_PORT: num(4000),
+  PANEL_HOST: z.string().default("127.0.0.1"),
+  PANEL_PASSWORD: optStr,
+
   // Seguridad
   WEBHOOK_SECRET: optStr,
   ADMIN_TOKEN: optStr,

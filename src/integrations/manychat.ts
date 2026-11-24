@@ -5,6 +5,18 @@
 
 const BASE_URL = "https://api.manychat.com";
 
+export interface ManyChatFlow {
+  ns: string;
+  name: string;
+  folderId: number | null;
+}
+
+export interface ManyChatFolder {
+  id: number;
+  name: string;
+  parentId: number | null;
+}
+
 export interface ManyChatClient {
   sendText(subscriberId: string, messages: string[]): Promise<void>;
   sendFlow(subscriberId: string, flowNs: string): Promise<void>;
@@ -86,6 +98,49 @@ export class ManyChatApi implements ManyChatClient {
       field_name: field,
       field_value: value,
     });
+  }
+
+  /** Datos de la cuenta conectada (sirve para verificar la API key). */
+  async getPageInfo(): Promise<{ id?: string; name?: string }> {
+    const res = await this.call<{ data?: { id?: number | string; name?: string } }>("GET", "/fb/page/getInfo");
+    return { id: res.data?.id === undefined ? undefined : String(res.data.id), name: res.data?.name };
+  }
+
+  /** Todos los flows (automatizaciones) de la cuenta, con sus carpetas. */
+  async getFlows(): Promise<{ flows: ManyChatFlow[]; folders: ManyChatFolder[] }> {
+    type Raw = { data?: { flows?: Record<string, unknown>[]; folders?: Record<string, unknown>[] } };
+    const res = await this.call<Raw>("GET", "/fb/page/getFlows");
+    const num = (v: unknown) => (v === undefined || v === null || v === "" || v === 0 ? null : Number(v));
+    return {
+      flows: (res.data?.flows ?? []).map((f) => ({
+        ns: String(f.ns ?? f.flow_ns ?? ""),
+        name: String(f.name ?? f.ns ?? "Sin nombre"),
+        folderId: num(f.folder_id),
+      })).filter((f) => f.ns),
+      folders: (res.data?.folders ?? []).map((f) => ({
+        id: Number(f.id),
+        name: String(f.name ?? "Carpeta"),
+        parentId: num(f.parent_id),
+      })),
+    };
+  }
+
+  async getTags(): Promise<string[]> {
+    const res = await this.call<{ data?: { name: string }[] }>("GET", "/fb/page/getTags");
+    return (res.data ?? []).map((t) => t.name);
+  }
+
+  async createTag(name: string): Promise<void> {
+    await this.call("POST", "/fb/page/createTag", { name });
+  }
+
+  async getCustomFields(): Promise<string[]> {
+    const res = await this.call<{ data?: { name: string }[] }>("GET", "/fb/page/getCustomFields");
+    return (res.data ?? []).map((f) => f.name);
+  }
+
+  async createCustomField(name: string, description: string): Promise<void> {
+    await this.call("POST", "/fb/page/createCustomField", { caption: name, type: "text", description });
   }
 
   async getSubscriberTags(subscriberId: string): Promise<string[] | undefined> {

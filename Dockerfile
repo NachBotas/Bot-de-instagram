@@ -13,6 +13,7 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY package.json ./
 COPY config ./config
+COPY panel ./panel
 # Montá un volumen en /app/data para no perder las conversaciones al redeployar
 VOLUME ["/app/data"]
 EXPOSE 3000
